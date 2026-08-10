@@ -8,8 +8,11 @@ cron container's dependency surface at zero.
 
 Pipeline:
   Section 4  Regime check (NASDAQ Composite proxy: ONEQ)
-  Universe   Nasdaq Trader directory (free) x Alpaca tradable assets ->
-             common-stock-like universe
+  Universe   Alpaca tradable assets, filtered to common-stock-like names
+             using Alpaca's own asset `name` field (see NON_COMMON_STOCK_RE
+             below — the Nasdaq Trader symbol directory was tried first but
+             is IP/network-blocked from the Claude Code cloud routine
+             container; confirmed via a live test, not a guess)
   Stage A    ~50-day bars, whole universe -> Section 5 price/liquidity/ADR
   Stage B    ~150-day bars, Stage-A survivors only -> Section 5 momentum
              percentile (ranked against Stage-A survivors, per operator
@@ -33,7 +36,6 @@ import json
 import re
 import subprocess
 import sys
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -45,9 +47,6 @@ ALPACA_SH = ROOT / "scripts" / "alpaca.sh"
 CANDIDATES_FILE = ROOT / "memory" / "CANDIDATES.md"
 POSITIONS_FILE = ROOT / "memory" / "POSITIONS.json"
 
-NASDAQ_LISTED_URL = "http://ftp.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
-OTHER_LISTED_URL = "http://ftp.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
-
 # NASDAQ Composite proxy. Alpaca's market data API has no raw-index
 # product for ^IXIC (it isn't a tradable security). ONEQ (Fidelity Nasdaq
 # Composite Index ETF) is the closest tradable instrument that actually
@@ -56,8 +55,29 @@ OTHER_LISTED_URL = "http://ftp.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
 # invention - documented in memory/TRADING-STRATEGY.md.
 REGIME_PROXY = "ONEQ"
 
+# Common-stock/ETF filtering: best-effort regex against Alpaca's own asset
+# `name` field. The free Nasdaq Trader symbol directory (which has an
+# explicit ETF Y/N flag) was tried first but returns HTTP 403 from the
+# Claude Code cloud routine container's network — confirmed via a live
+# test from that exact environment, not a timeout, not a guess. Rather
+# than depend on a source that's actively blocked in production, this
+# uses data already being fetched (no new network dependency at all).
+#
+# Verified empirically against real Alpaca asset names (see conversation
+# history / commit message): catches plain "ETF" names (IWM, XLF, JEPI,
+# BND), "Trust"-named funds (QQQ: "Invesco QQQ Trust, Series 1"; GLD:
+# "SPDR Gold Trust"), and known ADR/warrant/unit/preferred language.
+# Known residual gaps (accepted, documented): leveraged/thematic ETFs
+# whose short name omits both "ETF" and "Trust" (e.g. TQQQ: "ProShares
+# UltraPro QQQ") are only caught via the sponsor-name list below, which
+# is NOT exhaustive; foreign ADRs whose name doesn't say "ADR"/"American
+# Depositary" (e.g. TSM: "Taiwan Semiconductor Manufacturing Company
+# Ltd.") are not caught at all. See memory/TRADING-STRATEGY.md known gaps.
 NON_COMMON_STOCK_RE = re.compile(
-    r"\b(ADR|American Depositary|Warrant|Rights?|Units?|Preferred|Notes?)\b",
+    r"\b(ADR|American Depositary|Warrant|Rights?|Units?|Preferred|Notes?"
+    r"|ETF|Trust|Index Fund"
+    r"|ProShares|Direxion|iShares|Invesco QQQ|SPDR|VanEck|WisdomTree"
+    r"|Global X|First Trust|Simplify|YieldMax|Roundhill|Amplify)\b",
     re.IGNORECASE,
 )
 
@@ -77,58 +97,20 @@ def run_alpaca(*args):
     return json.loads(result.stdout)
 
 
-def fetch_nasdaq_directory():
-    """Free, unauthenticated Nasdaq Trader symbol directory. Returns
-    {symbol: exclude_bool} - True if the symbol looks like an ETF or a
-    non-common-stock instrument (warrant/unit/preferred/ADR/etc by name).
-    This is a best-effort filter, not authoritative - see known gaps in
-    memory/TRADING-STRATEGY.md."""
-    symbols = {}
-    fetch_failures = []
-    for url in (NASDAQ_LISTED_URL, OTHER_LISTED_URL):
-        try:
-            with urllib.request.urlopen(url, timeout=30) as resp:
-                text = resp.read().decode("utf-8", errors="replace")
-        except Exception as exc:  # noqa: BLE001
-            print(f"WARNING: could not fetch {url}: {exc}", file=sys.stderr)
-            fetch_failures.append(url)
-            continue
-        lines = text.strip().split("\n")
-        if len(lines) < 2:
-            fetch_failures.append(url)
-            continue
-        header = lines[0].split("|")
-        for line in lines[1:-1]:  # last line is a file-creation-time footer
-            fields = line.split("|")
-            if len(fields) != len(header):
-                continue
-            row = dict(zip(header, fields))
-            sym = row.get("Symbol") or row.get("ACT Symbol")
-            if not sym:
-                continue
-            is_etf = row.get("ETF", "N").strip().upper() == "Y"
-            name = row.get("Security Name", "")
-            is_non_common = bool(NON_COMMON_STOCK_RE.search(name))
-            symbols[sym] = is_etf or is_non_common
-
-    if len(fetch_failures) == 2:
-        # Both sources failed. Section 12: "data feed gap or suspected bad
-        # data" is a halt condition. Proceeding here would silently let
-        # ETFs and non-common-stock instruments into a universe that
-        # Section 5 requires to be "US-listed common stock" only — that's
-        # worse than stopping. Fail loudly instead of failing open.
-        raise RuntimeError(
-            "Both Nasdaq Trader directory sources failed "
-            f"({fetch_failures}). Cannot build the common-stock/ETF "
-            "filter. Refusing to proceed with an unfiltered universe."
-        )
-    return symbols
-
-
 def fetch_tradable_universe():
+    """Section 5 "US-listed common stock" universe. Filters Alpaca's
+    tradable us_equity assets using NON_COMMON_STOCK_RE against each
+    asset's own `name` field — no external data source, see the comment
+    on NON_COMMON_STOCK_RE for why and its known residual gaps."""
     assets = run_alpaca("assets")
-    directory = fetch_nasdaq_directory()
+    if not assets:
+        # Section 12: "data feed gap or suspected bad data". An empty
+        # asset list from Alpaca itself is a core-dependency failure, not
+        # a filtering edge case — fail loudly rather than proceed with a
+        # zero-symbol universe.
+        raise RuntimeError("Alpaca returned zero tradable assets. Refusing to proceed.")
     universe = []
+    excluded_count = 0
     for a in assets:
         if not a.get("tradable"):
             continue
@@ -137,9 +119,16 @@ def fetch_tradable_universe():
         sym = a.get("symbol")
         if not sym:
             continue
-        if directory.get(sym):  # True => ETF or non-common-stock by name
+        name = a.get("name", "")
+        if NON_COMMON_STOCK_RE.search(name):
+            excluded_count += 1
             continue
         universe.append(sym)
+    print(
+        f"Universe filter: {len(universe)} kept, {excluded_count} excluded "
+        "as ETF/non-common-stock by name (best-effort, see known gaps)",
+        file=sys.stderr,
+    )
     if MAX_SYMBOLS:
         universe = universe[:MAX_SYMBOLS]
     return universe

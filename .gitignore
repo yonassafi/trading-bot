@@ -2,3 +2,4 @@
 /DAILY-SUMMARY.md
 __pycache__/
 *.pyc
+.gstack/

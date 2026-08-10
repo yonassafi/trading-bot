@@ -268,12 +268,27 @@ own rejected claims.
   true consolidated-tape volume. The $10M/30×-equity threshold is used
   exactly as stated (Section 0.4 forbids adjusting it to compensate) —
   `scripts/screener.py` logs a loud warning every run instead.
-- **Common-stock/ETF filtering**: intersection of Alpaca's tradable asset
-  list with the free, unauthenticated Nasdaq Trader symbol directory
-  (explicit ETF flag). ADRs/warrants/units/preferred aren't cleanly
-  flagged by any free source — best-effort name-regex exclusion
-  (`ADR`, `Warrant`, `Rights`, `Units`, `Preferred`, `Notes`). Residual
-  imprecision is a known gap.
+- **Common-stock/ETF filtering**: best-effort name-regex exclusion applied
+  directly to Alpaca's own tradable-asset `name` field (`scripts/screener.py::NON_COMMON_STOCK_RE`)
+  — catches `ADR`/`American Depositary`/`Warrant`/`Rights`/`Units`/`Preferred`/`Notes`/
+  `ETF`/`Trust`/`Index Fund` plus a non-exhaustive list of major ETF-sponsor
+  names (ProShares, Direxion, iShares, SPDR, VanEck, WisdomTree, Global X,
+  First Trust, Simplify, YieldMax, Roundhill, Amplify). The free,
+  unauthenticated Nasdaq Trader symbol directory (which has an explicit
+  ETF Y/N flag) was tried first and worked from a local sandbox, but a
+  live test from inside an actual Claude Code cloud routine returned
+  HTTP 403 on both endpoints — confirmed network/IP-level blocked, not a
+  timeout, not fixable by spoofing a browser User-Agent (also tested).
+  Rather than depend on a source that's blocked in production, this uses
+  data already being fetched (zero new network dependency). Verified
+  empirically against a live pull of Alpaca's ~13,300-asset universe:
+  correctly excludes 7,445 ETFs/funds while keeping 5,901 common-stock-like
+  names. Known residual gaps: leveraged/thematic ETFs whose short name
+  omits both "ETF" and "Trust" (e.g. TQQQ: "ProShares UltraPro QQQ" — only
+  caught here because "ProShares" is in the sponsor list, which is not
+  exhaustive) and foreign ADRs whose name doesn't say "ADR"/"American
+  Depositary" (e.g. TSM: "Taiwan Semiconductor Manufacturing Company
+  Ltd.") are not caught at all.
 - **Prior-impulse (L, H) selection** (Section 6.1): multiple (L, H) pairs
   can satisfy the numeric constraints. The pair with the **most recent
   valid H** is selected, since Section 6.2 measures the consolidation

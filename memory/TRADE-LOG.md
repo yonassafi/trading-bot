@@ -31,10 +31,11 @@ Entries today: N | Trades this week: N
 ---
 
 ## Day 0 — EOD Snapshot (pre-launch baseline)
-**Equity:** $10,000.00 | **Cash:** $10,000.00 (100%) | **Day P&L:** $0 | **Phase P&L:** $0
+**Equity:** $100,000.00 | **Cash:** $100,000.00 (100%) | **Day P&L:** $0 | **Phase P&L:** $0
 
-No positions yet. QMS-01 launches tomorrow. NOTE: as of this commit, the
-connected Alpaca paper account still shows its default $100,000 balance —
-reset it to $10,000 via the Alpaca paper dashboard before the first real
-`pre-market`/`market-open` run, or `daily-summary`'s Day P&L math on day
-one will be off by the difference.
+No positions yet. QMS-01 launches tomorrow. Confirmed via
+`scripts/alpaca.sh account` against the connected paper account —
+Alpaca's default paper balance, kept as-is rather than reset to the
+$10,000 figure from the strategy doc's illustrative sizing examples.
+Position sizing (Section 8.6) scales proportionally, so this doesn't
+change the strategy's behavior, just its dollar scale.
