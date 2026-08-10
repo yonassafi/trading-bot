@@ -1,42 +1,31 @@
 ---
-description: Market-open execution — validate today's plan, run buy-side gate, place trades + stops
+description: QMS-01 entry monitor — retrospective ORH breakout check + sizing + entries (local test run)
 ---
 
-Run the market-open execution workflow locally. Uses the local .env for
-credentials. Resolve today's date via: DATE=$(date +%Y-%m-%d).
+Run the ENTRY MONITOR workflow (Section 8) locally (`.env` for
+credentials). Only meaningful after 10:00 ET, once the 09:30-10:00
+opening-range bars exist. Full step-by-step logic is in
+routines/market-open.md — follow it exactly, with these differences:
+skip the env-var-check block (use `.env`), and don't require the
+persistence framing (still commit if you want the test run to leave a
+trail, but it's optional for a local dry run).
 
-STEP 1 — Read memory for today's plan:
-- memory/TRADING-STRATEGY.md
-- TODAY's entry in memory/RESEARCH-LOG.md (if missing, run pre-market
-  STEPS 1-3 inline). Never trade without documented research.
-- tail of memory/TRADE-LOG.md (for weekly trade count)
+STEP 1 — Halt check: `bash scripts/halt.sh check`. If non-zero, STOP.
 
-STEP 2 — Re-validate with live data:
-  bash scripts/alpaca.sh account
-  bash scripts/alpaca.sh positions
-  bash scripts/alpaca.sh quote <each planned ticker>
-Check bid/ask spread; skip anything halted or illiquid.
+STEP 2 — Read today's memory/CANDIDATES.md entry. If missing/not dated
+today: log UNSPECIFIED_SITUATION, STOP. Never invent a fallback screen.
 
-STEP 3 — Hard-check rules BEFORE every order. Skip any trade that fails
-and log the reason:
-- Total positions after trade <= 6
-- Trades this week <= 3
-- Position cost <= 20% of equity
-- Position cost <= available cash
-- Catalyst documented in today's RESEARCH-LOG
-- daytrade_count leaves room (PDT: 3/5 rolling business days)
+STEP 3 — Compute today's portfolio-limit budget from memory/POSITIONS.json
+(Section 10: max 5 open, max 2 new/day, max 3% total open risk, max 20%
+per position).
 
-STEP 4 — Execute the buys (market orders, day TIF):
-  bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N","side":"buy","type":"market","time_in_force":"day"}'
-Wait for fill confirmation before placing the stop.
+STEP 4 — For each ranked candidate, in order, until slots run out: Gap
+check -> opening-range/ORH -> retrospective trigger check -> stop-limit
+order + 60s fill window -> initial stop -> stop-width validation
+(STOP_TOO_WIDE) -> sizing -> liquidity check -> portfolio-limit re-check
+-> resting stop-market order -> record in memory/POSITIONS.json and
+memory/TRADE-LOG.md. See routines/market-open.md STEP 4 for the exact
+sub-steps and formulas — follow them precisely, do not paraphrase the math.
 
-STEP 5 — Immediately place 10% trailing stop GTC for each new position:
-  bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N","side":"sell","type":"trailing_stop","trail_percent":"10","time_in_force":"gtc"}'
-If Alpaca rejects with PDT error, fall back to fixed stop 10% below entry.
-If also blocked, queue the stop in TRADE-LOG as "PDT-blocked, set tomorrow AM".
-
-STEP 6 — Append each trade to memory/TRADE-LOG.md (matching existing format):
-Date, ticker, side, shares, entry price, stop level, thesis, target, R:R.
-
-STEP 7 — Notification: only if a trade was placed.
-  bash scripts/telegram.sh "<tickers, shares, fill prices, one-line why>"
+STEP 5 — Print a summary of what happened (entries, rejections, any
+exceptions logged).

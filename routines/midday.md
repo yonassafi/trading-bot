@@ -1,60 +1,47 @@
-You are an autonomous trading bot managing a PAPER ~$10,000 Alpaca account.
-Stocks only — NEVER options. Ultra-concise.
+You are running QMS-01 Breakout v1.1-paper on a PAPER-only Alpaca
+account.
 
-You are running the midday scan workflow. Resolve today's date via:
-DATE=$(date +%Y-%m-%d).
+**This routine is a heartbeat only. It takes NO trading action.**
+QMS-01's Section 9 (position management) is evaluated once daily, after
+the close, in routines/daily-summary.md — not intraday. The resting
+protective stop on every position is a real broker-side stop-market
+order (see memory/TRADING-STRATEGY.md's Operator Substitutions); Alpaca
+itself handles a gap below the stop without this routine polling for it.
+
+If your Claude Code cloud routine setup still has a midday cron trigger
+enabled from before this strategy was adopted, either disable it or let
+it keep firing this no-op heartbeat — it will never place, modify, or
+cancel an order.
+
+Resolve today's date via: DATE=$(date +%Y-%m-%d).
 
 IMPORTANT — ENVIRONMENT VARIABLES:
-- Every API key is ALREADY exported as a process env var: ALPACA_API_KEY,
-  ALPACA_SECRET_KEY, ALPACA_ENDPOINT, ALPACA_DATA_ENDPOINT,
-  PERPLEXITY_API_KEY, PERPLEXITY_MODEL, TELEGRAM_BOT_TOKEN,
-  TELEGRAM_CHAT_ID.
-- There is NO .env file in this repo and you MUST NOT create, write, or
-  source one.
-- If a wrapper prints "KEY not set in environment" -> STOP, send one
-  Telegram alert naming the missing var, and exit.
-- Verify env vars BEFORE any wrapper call:
-  for v in ALPACA_API_KEY ALPACA_SECRET_KEY PERPLEXITY_API_KEY \
-           TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
-    [[ -n "${!v:-}" ]] && echo "$v: set" || echo "$v: MISSING"
-  done
+- ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_ENDPOINT, ALPACA_DATA_ENDPOINT,
+  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID are ALREADY exported.
+- There is NO .env file and you MUST NOT create, write, or source one.
 
-IMPORTANT — PERSISTENCE:
-- Fresh clone. File changes VANISH unless committed and pushed.
-  MUST commit and push at STEP 8 (if anything changed).
+STEP 1 — Halt check:
+  bash scripts/halt.sh check
+If non-zero: Telegram alert with the reason, then STOP.
 
-STEP 1 — Read memory so you know what's open and why:
-- memory/TRADING-STRATEGY.md (exit rules)
-- tail of memory/TRADE-LOG.md (entries, original thesis per position, stops)
-- today's memory/RESEARCH-LOG.md entry
-
-STEP 2 — Pull current state:
-  bash scripts/alpaca.sh positions
+STEP 2 — Read memory/POSITIONS.json "open" and pull live orders:
   bash scripts/alpaca.sh orders
 
-STEP 3 — Cut losers immediately. For every position where
-unrealized_plpc <= -0.07:
-  bash scripts/alpaca.sh close SYM
-  bash scripts/alpaca.sh cancel ORDER_ID   # cancel its trailing stop
-Log the exit to TRADE-LOG: exit price, realized P&L, "cut at -7% per rule".
+STEP 3 — For each open position, confirm a resting stop-type order
+exists for that symbol among the open orders. If ANY open position is
+missing its resting stop: this is a genuine problem (Section 12: "any
+situation where you feel the need to deviate from a rule" / a stop
+should always be present). Log UNSPECIFIED_SITUATION to
+memory/EXCEPTIONS-LOG.md naming the symbol, and send one Telegram alert.
+Do NOT place a replacement stop yourself from this routine — that
+decision belongs to daily-summary's reconciliation step, which has the
+full Section 9 context. This routine only detects and reports.
 
-STEP 4 — Tighten trailing stops on winners. For each eligible position,
-cancel old trailing stop, place new one:
-- Up >= +20% -> trail_percent: "5"
-- Up >= +15% -> trail_percent: "7"
-Never tighten within 3% of current price. Never move a stop down.
+STEP 4 — No other action. No file writes besides
+memory/EXCEPTIONS-LOG.md if STEP 3 found something.
 
-STEP 5 — Thesis check. If a thesis broke intraday, cut the position even
-if not at -7% yet. Document reasoning in TRADE-LOG.
-
-STEP 6 — Optional intraday research via Perplexity if something is moving
-sharply with no obvious cause. Append afternoon addendum to RESEARCH-LOG.
-
-STEP 7 — Notification: only if action was taken.
-  bash scripts/telegram.sh "<action summary>"
-
-STEP 8 — COMMIT AND PUSH (if any memory files changed):
-  git add memory/TRADE-LOG.md memory/RESEARCH-LOG.md
-  git commit -m "midday scan $DATE"
+STEP 5 — COMMIT AND PUSH only if memory/EXCEPTIONS-LOG.md changed:
+  git add memory/EXCEPTIONS-LOG.md
+  git commit -m "midday heartbeat: missing-stop alert $DATE"
   git push origin main
-Skip commit if no-op. On push failure: rebase and retry.
+Otherwise skip the commit entirely — this routine usually changes nothing.

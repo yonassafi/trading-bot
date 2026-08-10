@@ -1,0 +1,8 @@
+{
+  "starting_equity": 10000.0,
+  "peak_equity": 10000.0,
+  "peak_equity_date": null,
+  "last_updated_date": null,
+  "current_drawdown_pct": 0.0,
+  "halt_threshold_pct": 25.0
+}
