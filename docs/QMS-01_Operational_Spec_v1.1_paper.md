@@ -144,12 +144,31 @@ shape tests** — direction and monotonicity — rather than thresholds,
 because those are what the source actually specifies.
 
 ### 6.1 Prior impulse
+
+> **Operator amendment 2026-08-11.** The original text ("there exist a
+> low L and a later high H") did not say which pair to select when
+> several qualify. The implementation took the most recent qualifying
+> high, which advances forward one session per session while price stays
+> elevated — pinning the measured consolidation near 11 sessions however
+> long the real base is, making §6.2 inert, giving §6.3–6.5 a truncated
+> slice, and pointing §6.7 at an ordinary base bar instead of the impulse
+> peak. Replaced with a deterministic single pass.
+
 ```
-Within the last 63 sessions there exist a low L and a later high H:
+H = highest High in the last 63 sessions occurring at least
+    10 sessions ago. Ties -> most recent.
+L = lowest Low in the 25 sessions immediately preceding H.
+    Ties -> most recent.
+
+Validate:
   (H / L - 1) >= 0.30
-  H occurred at least 10 sessions ago
   sessions between L and H <= 25
+
+If validation fails -> not a candidate.
+Do NOT search for an alternative L/H pair.
 ```
+
+H must be the highest high for §6.7's containment test to be meaningful.
 
 ### 6.2 Consolidation window
 Runs from H to today.
@@ -246,9 +265,17 @@ After 10:00 ET, cancel. No entry that day.
 At time T, when last trade price first exceeds ORH:
 ```
 session_low_T   = lowest Low from 09:30 ET to T
-limit_price     = ORH × 1.0050          (worst-case fill)
+
+TICK ROUNDING — all computed order prices round UP to $0.01:
+  stop_price    = ceil(ORH × 1.0005, 0.01)
+  limit_price   = ceil(ORH × 1.0050, 0.01)
+  IF limit_price <= stop_price:
+      limit_price = stop_price + 0.01
+
 est_risk_share  = limit_price − session_low_T
 ```
+Sizing uses the ROUNDED `limit_price`. §5 floors price at $5.00, so
+sub-penny increments never apply.
 
 Validate before sending the order:
 ```
@@ -268,27 +295,51 @@ IF shares < 1 → no trade
 ```
 
 ### 8.4 Order
+
+Immediately before submitting:
+```
+IF last_trade_price > limit_price:
+    no trade, log PRICE_RAN_AWAY
+```
+A last trade price between `stop_price` and `limit_price` is acceptable —
+it fills immediately inside the band and risk was sized against
+`limit_price`. No re-arming. No second attempt later in the window.
+
 ```
 Buy stop-limit, quantity = shares
-  stop  = ORH × 1.0005
-  limit = ORH × 1.0050
+  stop  = stop_price      (rounded, §8.3)
+  limit = limit_price     (rounded, §8.3)
 Cancel if unfilled after 60 seconds. Never chase.
 Never re-send for the same symbol the same day.
 ```
+
+**Partial fills.** At the 60-second cancel:
+```
+IF filled_qty == 0:
+    no position, log NO_FILL
+IF filled_qty >= 1:
+    this is the position
+    never top up, never re-send, symbol is done for the day
+```
+Log `intended_qty`, `filled_qty`, `fill_ratio` on every entry attempt.
 
 ### 8.5 Stop placement (after fill)
 ```
 session_low_F = lowest Low from 09:30 ET to moment of fill
 STOP          = session_low_F
 ```
-Place immediately as a resting stop. The stop never widens.
-If the low extends later in the session, the stop does not move.
+Place immediately as a resting stop, **for `filled_qty` only** — never
+for `intended_qty`. The stop never widens. If the low extends later in
+the session, the stop does not move.
 
 ### 8.6 Post-fill reconciliation
 ```
 actual_risk_share = fill_price − STOP
-actual_risk_pct   = (shares × actual_risk_share) / equity
+actual_risk_pct   = (filled_qty × actual_risk_share) / equity
 ```
+Uses `filled_qty`, not `intended_qty` — per §8.4 the fill *is* the
+position. A partial fill therefore carries proportionally less risk than
+planned, which is acceptable; it is never topped up.
 Because `fill_price <= limit_price`, actual risk is normally at or below
 planned. It can exceed plan only if the session low extended between
 trigger and fill.
@@ -385,7 +436,12 @@ positions do not represent five independent bets.
 
 **Per entry:** symbol, timestamp, ORH, fill, stop, risk/share, shares,
 account risk %, equity, which reference SMA was selected, portfolio
-state.
+state, plus `intended_qty`, `filled_qty` and `fill_ratio` (§8.4) —
+logged on every entry *attempt*, including those that end NO_FILL or
+PRICE_RAN_AWAY.
+
+**Daily:** in addition to the fields below, report `fill_ratio` for the
+day's entry attempts.
 
 **Per exit:** symbol, timestamp, price, triggering rule, R-multiple,
 days held.
@@ -448,6 +504,10 @@ to override.
 | Date | Change | Reason |
 |---|---|---|
 | 2026-08-11 | §8.3–8.6 reordered: sizing moved ahead of the order, keyed to `limit_price` and `session_low_T`; post-fill `RISK_OVERRUN` check added at 0.75% | The original ordering was circular and unexecutable — sizing required a `fill_price` that only existed after the order sizing was meant to quantify. The old §8.5 post-fill stop-width check is split: the `ADR_20` test moved pre-trade as `STOP_TOO_WIDE_PRETRADE` (rejects before a position exists rather than opening one and immediately market-exiting it), and §8.6 catches the residual case where the session low extends between trigger and fill. No Section 14 parameter altered. |
+| 2026-08-11 | §8.3 tick rounding: order prices round UP to $0.01, with `limit_price = stop_price + 0.01` if they collide | `ORH × 1.0005` yields sub-penny prices, which Alpaca rejects on stocks >= $1. Unrounded, the first live entry would have been rejected — and §12 makes an unexplained rejection a halt condition. Sizing continues to use `limit_price`; §5's $5.00 floor means sub-penny increments never apply. |
+| 2026-08-11 | §8.4 `PRICE_RAN_AWAY`: skip if `last_trade_price > limit_price` at submission | A buy-stop whose trigger sits at or below market is rejected by the exchange. Under the retrospective 10:05 approximation the break may be up to 30 minutes old, so this is the common case on strong moves. Hard skip, no re-arm — a later re-attempt would be chasing, which §8.4 forbids. |
+| 2026-08-11 | §8.4/§8.5 partial fills: the fill IS the position; stop covers `filled_qty` only; never top up | Stop-limit day orders partial-fill routinely. Placing a resting sell-stop for `intended_qty` against a smaller fill would sell shares not held — a short on a long-only system (Constraint #6). `intended_qty`, `filled_qty` and `fill_ratio` are now logged per attempt (§11). |
+| 2026-08-11 | §6.1 impulse selection replaced with a deterministic single pass (H = highest High >= 10 sessions old; L = lowest Low in the 25 sessions before it) | The original gave constraints but no tie-break, and the implementation took the most recent qualifying high. H then advanced one session per session while price stayed elevated, pinning the measured consolidation near 11 sessions regardless of the real base — §6.2 inert, §6.3–6.5 analysing a truncated slice, §6.7 referenced against an ordinary base bar instead of the impulse peak. |
 
 ---
 
@@ -464,6 +524,8 @@ causes of poor performance:
 - All of Section 10
 - 2R earnings cushion (§9.5)
 - 63-day impulse lookback and 30% impulse threshold (§6.1)
+- 0.75% `actual_risk_pct` overrun trip (§8.6 post-fill reconciliation)
+- `PRICE_RAN_AWAY` as a hard skip rather than a delayed re-arm (§8.4)
 
 Do not change them. Report how they behave.
 

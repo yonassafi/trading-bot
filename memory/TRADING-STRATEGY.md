@@ -111,9 +111,18 @@ Pattern: big move → sideways/pullback → support on a RISING moving
 average → higher lows → tighter and tighter → range breakout. No numeric
 "tight" definition exists in the source; expressed as ordinal shape tests.
 
-- **6.1 Prior impulse**: within the last 63 sessions, a low L and later
-  high H exist where `(H/L - 1) >= 0.30`, H occurred >= 10 sessions ago,
-  span between L and H <= 25 sessions.
+- **6.1 Prior impulse** (amended 2026-08-11 — deterministic single pass,
+  no pair search):
+  ```
+  H = highest High in the last 63 sessions occurring at least
+      10 sessions ago. Ties -> most recent.
+  L = lowest Low in the 25 sessions immediately preceding H.
+      Ties -> most recent.
+  Validate: (H/L - 1) >= 0.30 AND sessions between L and H <= 25
+  If validation fails -> not a candidate.
+  Do NOT search for an alternative L/H pair.
+  ```
+  H must be the highest high for 6.7's containment test to be meaningful.
 - **6.2 Consolidation window**: H to today, length 10–40 sessions.
 - **6.3 Rising support (ordinal)**: reference SMA = shortest of
   {10, 20, 50} sitting below price >= 80% of the consolidation. Must be
@@ -157,8 +166,17 @@ evaluated after the open / after sizing — checked in
 At time T, when last trade price first exceeds ORH:
 
     session_low_T   = lowest Low from 09:30 ET to T
-    limit_price     = ORH × 1.0050          (worst-case fill)
+
+    TICK ROUNDING — all computed order prices round UP to $0.01:
+      stop_price    = ceil(ORH × 1.0005, 0.01)
+      limit_price   = ceil(ORH × 1.0050, 0.01)
+      IF limit_price <= stop_price:
+          limit_price = stop_price + 0.01
+
     est_risk_share  = limit_price − session_low_T
+
+Sizing uses the ROUNDED limit_price. Section 5 floors price at $5.00, so
+sub-penny increments never apply.
 
 Validate before sending the order:
 
@@ -177,26 +195,49 @@ Size:
 
 ### 8.4 Order
 
+Immediately before submitting:
+
+    IF last_trade_price > limit_price:
+        no trade, log PRICE_RAN_AWAY
+
+Price between stop_price and limit_price is acceptable — it fills
+immediately inside the band and risk was sized against limit_price.
+No re-arming. No second attempt later in the window.
+
     Buy stop-limit, quantity = shares
-      stop  = ORH × 1.0005
-      limit = ORH × 1.0050
+      stop  = stop_price      (rounded, 8.3)
+      limit = limit_price     (rounded, 8.3)
     Cancel if unfilled after 60 seconds. Never chase.
     Never re-send for the same symbol the same day.
+
+**Partial fills.** At the 60-second cancel:
+
+    IF filled_qty == 0:
+        no position, log NO_FILL
+    IF filled_qty >= 1:
+        this is the position
+        never top up, never re-send, symbol is done for the day
+
+Log intended_qty, filled_qty, fill_ratio on every entry attempt.
 
 ### 8.5 Stop placement (after fill)
 
     session_low_F = lowest Low from 09:30 ET to moment of fill
     STOP          = session_low_F
 
-Place immediately as a resting stop. The stop never widens.
-If the low extends later in the session, the stop does not move.
+Place immediately as a resting stop, **for filled_qty only** — never for
+intended_qty. A stop covering shares you don't hold is a short on a
+long-only system. The stop never widens. If the low extends later in the
+session, the stop does not move.
 
 Placed as a real **stop-market** order (operator decision — see below).
 
 ### 8.6 Post-fill reconciliation
 
     actual_risk_share = fill_price − STOP
-    actual_risk_pct   = (shares × actual_risk_share) / equity
+    actual_risk_pct   = (filled_qty × actual_risk_share) / equity
+
+Uses filled_qty, not intended_qty — per 8.4 the fill IS the position.
 
 Because fill_price <= limit_price, actual risk is normally at or below
 planned. It can exceed plan only if the session low extended between
@@ -290,7 +331,9 @@ override. Mechanism: `memory/HALT.md` — see Operator Substitutions.
 
 1.10 extension limit · 5-minute opening range · 0.5% risk/trade · day-4
 partial timing · half-risk stop after partial · all of Section 10 ·
-63-day impulse lookback/30% threshold.
+63-day impulse lookback/30% threshold · 2R earnings cushion ·
+**0.75% actual_risk_pct overrun trip (8.6)** · **PRICE_RAN_AWAY as a hard
+skip rather than a delayed re-arm (8.4)**.
 
 ---
 
