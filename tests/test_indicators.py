@@ -146,49 +146,75 @@ class TestFindPriorImpulse(unittest.TestCase):
         bars += [bar(135, 136, 134, 135) for _ in range(15)]  # consolidation
         return bars
 
-    def test_finds_an_impulse(self):
-        got = ind.find_prior_impulse(self._series())
-        self.assertIsNotNone(got)
-
-    def test_H_is_the_most_recent_qualifying_bar_NOT_the_impulse_peak(self):
-        """CHARACTERISATION TEST — documents a live defect, not intent.
-
-        The series peaks at 140 (idx 15) then drifts sideways at ~135.
-        The returned H is NOT that peak: it is the most recent bar that
-        happens to sit >=30% above some low within the preceding 25
-        sessions, which is always index-10 while price stays elevated.
-
-        This is not cosmetic. Every Section 6 shape test measures over
-        [h_idx, today], so a drifting H truncates the consolidation to
-        ~11 sessions and 6.7 compares against the wrong reference price.
-        See test_consolidation_window_degenerates below.
-
-        If Section 6.1's tie-break is amended to "H = highest high in the
-        lookback", this test SHOULD fail — that is the signal the fix
-        landed, and it should then be rewritten to assert the peak.
-        """
+    def test_H_is_the_impulse_peak(self):
+        """§6.1 as amended 2026-08-11: H is the HIGHEST High at least 10
+        sessions old, not merely the most recent qualifying bar. §6.7's
+        containment test is meaningless otherwise."""
         bars = self._series()
-        got = ind.find_prior_impulse(bars)
-        _l_idx, h_idx, _l_price, h_price = got
+        _l_idx, h_idx, _l_price, h_price = ind.find_prior_impulse(bars)
         true_peak_idx = max(range(len(bars)), key=lambda i: bars[i]["h"])
-        self.assertEqual(true_peak_idx, 15)
-        self.assertEqual(bars[true_peak_idx]["h"], 140)
-        self.assertNotEqual(h_idx, true_peak_idx)
-        self.assertLess(h_price, 140)
+        self.assertEqual(h_idx, true_peak_idx)
+        self.assertEqual(h_idx, 15)
+        self.assertEqual(h_price, 140)
 
-    def test_consolidation_window_degenerates(self):
-        """Section 6.2 requires a 10-40 session consolidation. Because H
-        drifts forward, the MEASURED length is pinned near 11 regardless
-        of the true base length — so 6.2 is effectively inert and 6.3-6.5
-        analyse a truncated slice."""
+    def test_consolidation_window_tracks_the_real_base(self):
+        """Regression guard for the defect fixed 2026-08-11. The measured
+        consolidation used to be pinned near 11 sessions whatever the base
+        did, which made §6.2's 10-40 test inert and handed §6.3-6.5 a
+        truncated slice. It must now grow with the base."""
         base = [bar(100, 101, 99, 100) for _ in range(10)]
-        base.append(bar(120, 140, 119, 138))  # the real peak
+        base.append(bar(120, 140, 119, 138))  # the real peak, idx 10
         measured = []
         for base_len in (10, 15, 20, 30):
             b = base + [bar(132, 134, 130, 132) for _ in range(base_len)]
             _l, h_idx, _lp, _hp = ind.find_prior_impulse(b)
+            self.assertEqual(h_idx, 10, "H must stay pinned to the peak")
             measured.append((len(b) - 1) - h_idx + 1)
-        self.assertEqual(measured, [11, 11, 11, 11])
+        self.assertEqual(measured, [11, 16, 21, 31])
+
+    def test_L_is_lowest_low_in_the_25_sessions_before_H(self):
+        # Two lows before the peak; the LOWER one must be selected even
+        # though it is older.
+        bars = [bar(100, 101, 80, 100)]                       # idx 0, low 80
+        bars += [bar(100, 101, 99, 100) for _ in range(4)]
+        bars.append(bar(100, 101, 90, 100))                   # idx 5, low 90
+        bars += [bar(100, 101, 99, 100) for _ in range(4)]
+        bars.append(bar(130, 140, 129, 138))                  # idx 10, peak
+        bars += [bar(132, 134, 130, 132) for _ in range(15)]
+        l_idx, h_idx, l_price, _hp = ind.find_prior_impulse(bars)
+        self.assertEqual(h_idx, 10)
+        self.assertEqual(l_idx, 0)
+        self.assertEqual(l_price, 80)
+
+    def test_validation_failure_does_not_search_for_another_pair(self):
+        """The amendment is explicit: if the chosen H/L fails validation,
+        the symbol is not a candidate. An older pair that WOULD have
+        qualified must not rescue it."""
+        # An old pair that WOULD qualify: low 100 (idx 0) -> high 140
+        # (idx 1) is +40%. It sits outside the 25 sessions before H.
+        bars = [bar(100, 101, 100, 100)]                      # idx 0, low 100
+        bars.append(bar(130, 140, 129, 138))                  # idx 1, high 140
+        bars += [bar(139, 140, 138, 139) for _ in range(28)]  # idx 2-29
+        bars.append(bar(139, 141, 138, 140))                  # idx 30, peak 141
+        bars += [bar(139, 140, 138, 139) for _ in range(10)]  # age H past 10
+
+        # H = 141 at idx 30. L is drawn from idx 5-29 only, where the
+        # lowest low is 138 -> (141/138 - 1) = 2.2%, far under 30%.
+        # The old +40% pair must NOT rescue it.
+        self.assertIsNone(ind.find_prior_impulse(bars))
+
+        # Sanity: that old pair really would have qualified on its own.
+        early = bars[:12]
+        self.assertIsNotNone(ind.find_prior_impulse(early))
+
+    def test_ties_on_H_take_the_most_recent(self):
+        bars = [bar(100, 101, 99, 100) for _ in range(3)]
+        bars.append(bar(130, 140, 100, 138))                  # idx 3, high 140
+        bars += [bar(130, 135, 129, 132) for _ in range(3)]
+        bars.append(bar(130, 140, 129, 138))                  # idx 7, high 140
+        bars += [bar(132, 134, 130, 132) for _ in range(12)]
+        _l, h_idx, _lp, _hp = ind.find_prior_impulse(bars)
+        self.assertEqual(h_idx, 7)
 
     def test_respects_min_h_age(self):
         # H must be >= min_h_age sessions old; demand more age than exists.
@@ -201,17 +227,17 @@ class TestFindPriorImpulse(unittest.TestCase):
         # L at 5, H at 15 -> span 10. Allowing only 3 must reject.
         self.assertIsNone(ind.find_prior_impulse(self._series(), max_lh_span=3))
 
-    def test_tiebreak_takes_the_latest_eligible_index(self):
-        # Documented tie-break: scan back from index-min_h_age and take
-        # the FIRST hit. With price held near 140, the first hit is the
-        # boundary bar itself (index-10), not either "real" high.
+    def test_picks_the_highest_high_not_the_latest_eligible_bar(self):
+        # Two real highs (140 at idx 3, 145 at idx 7) then drift at 141.
+        # Amended §6.1 takes the highest (145), not the index-10 boundary.
         bars = [bar(100, 100, 100, 100) for _ in range(3)]
         bars.append(bar(100, 140, 100, 140))                  # idx 3
         bars += [bar(100, 100, 100, 100) for _ in range(3)]
-        bars.append(bar(100, 145, 100, 145))                  # idx 7
+        bars.append(bar(100, 145, 100, 145))                  # idx 7, peak
         bars += [bar(140, 141, 139, 140) for _ in range(12)]
-        got = ind.find_prior_impulse(bars)
-        self.assertEqual(got[1], len(bars) - 1 - 10)
+        _l, h_idx, _lp, h_price = ind.find_prior_impulse(bars)
+        self.assertEqual(h_idx, 7)
+        self.assertEqual(h_price, 145)
 
 
 class TestSegmentMinLows(unittest.TestCase):

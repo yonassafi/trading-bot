@@ -101,6 +101,28 @@ case "$cmd" in
   order)
     require_paper
     body="${1:?usage: order '<json>'}"
+    # IDEMPOTENCY (Section 10 protection, not plumbing hygiene).
+    # Every order MUST carry a client_order_id. Alpaca rejects a repeat
+    # of an id it has already seen, which makes a duplicate structurally
+    # impossible rather than merely discouraged by prose. Without it, a
+    # retry after an ambiguous timeout silently doubles position size —
+    # that is a "max single position 20% of equity" and "max total open
+    # risk 3.0%" breach, i.e. a risk-limit violation, not a glitch.
+    #
+    # Convention (see routines/market-open.md):
+    #   qms01-<YYYY-MM-DD>-<SYMBOL>-entry
+    #   qms01-<YYYY-MM-DD>-<SYMBOL>-stop
+    #   qms01-<YYYY-MM-DD>-<SYMBOL>-partial
+    #   qms01-<YYYY-MM-DD>-<SYMBOL>-exit
+    # Deterministic from date+symbol+purpose, so a re-run of the same
+    # logical order reproduces the same id and is refused by the broker.
+    if ! printf '%s' "$body" | grep -q '"client_order_id"'; then
+      echo "REFUSING: order body has no client_order_id." >&2
+      echo "A retry without one can duplicate the order and breach the" >&2
+      echo "Section 10 position/risk limits. Use:" >&2
+      echo '  qms01-<YYYY-MM-DD>-<SYMBOL>-<entry|stop|partial|exit>' >&2
+      exit 1
+    fi
     req -H "$H_KEY" -H "$H_SEC" -H "Content-Type: application/json" \
       -X POST -d "$body" "$API/orders"
     ;;

@@ -48,10 +48,22 @@ log it, do not guess the exit price.
 
 STEP 4 — Run Section 9.2-9.4 position management on whatever remains open:
   python3 scripts/position_manager.py
-This prints a JSON action list (partial_sell / replace_stop / full_exit
-per position) and already updates memory/POSITIONS.json's in-memory
-flags (partial_taken, current_stop, sessions_held). It does NOT execute
-orders — you must.
+It prints JSON with three keys:
+  "actions"  — partial_sell / replace_stop / full_exit per position
+  "logs"     — per-symbol reasoning, including any exception
+  "proposed_positions_state" — what memory/POSITIONS.json SHOULD look
+     like assuming every action succeeds
+
+IMPORTANT: this script does NOT execute orders and does NOT write
+memory/POSITIONS.json. It used to write the file before any order had
+been placed, so a rejection or crash afterwards left the file claiming
+partial_taken=true and a raised stop while the broker still held the old
+stop and full size — and the next day's run trusted the file.
+YOU write memory/POSITIONS.json, in STEP 5b, AFTER executing.
+
+If a "logs" entry carries an "exception", that position was NOT
+evaluated (stale/holiday bar, or already managed today). Take no action
+on it and carry the exception into memory/EXCEPTIONS-LOG.md.
 
 STEP 5 — Execute each action from STEP 4's output, in the order given,
 via scripts/alpaca.sh:
@@ -65,10 +77,33 @@ via scripts/alpaca.sh:
   and days_held using the actual fill price, move the position from
   "open" to "closed" in memory/POSITIONS.json (exit_rule from the
   action's "reason" field), append the exit to memory/TRADE-LOG.md.
+Every order needs a deterministic client_order_id — scripts/alpaca.sh
+refuses one without it. Use:
+  qms01-<DATE>-<SYM>-partial   for a 9.2 partial_sell
+  qms01-<DATE>-<SYM>-stop2     for a 9.3 replacement stop
+  qms01-<DATE>-<SYM>-exit      for a 9.4 full_exit
+This makes a duplicate from a retry structurally impossible; a duplicate
+sell could take the position short, which Binding Constraint #6 forbids.
+
 If any order is rejected for a reason you don't understand: log
 UNSPECIFIED_SITUATION, do not retry with different parameters, do not
 guess — this may itself be a Section 12 halt condition ("any order
-rejected for a reason not understood").
+rejected for a reason not understood"). scripts/alpaca.sh now prints
+Alpaca's actual rejection body to stderr, so read it before concluding
+the reason is not understood — most rejections are self-explanatory.
+
+STEP 5b — WRITE memory/POSITIONS.json (after executing, not before).
+Start from STEP 4's "proposed_positions_state" and correct it to match
+what ACTUALLY happened:
+- an action that was rejected or failed -> revert that position's
+  changed fields to their pre-run values and log the discrepancy
+- a partial_sell that filled short -> shares_remaining reflects the
+  ACTUAL filled quantity, not the requested one
+- a full_exit that filled -> move the position to "closed" with the real
+  exit price
+Persist reality, never intent. If you cannot determine what actually
+happened for a symbol, log UNSPECIFIED_SITUATION and leave that
+position's state untouched.
 
 STEP 6 — Peak-equity / drawdown check (Section 12). Read
 memory/RISK-STATE.json. Using today's final equity from STEP 2:
@@ -92,6 +127,12 @@ that file's format:
     carried a wrong hardcoded figure.)
   Open positions count, total open risk % of equity
   Entries today (from STEP 5 / market-open's log), trades this week
+  fill_ratio for today's entry ATTEMPTS (Section 11) — read
+    intended_qty / filled_qty / fill_ratio from today's market-open
+    entries in memory/TRADE-LOG.md, including attempts that ended
+    NO_FILL or PRICE_RAN_AWAY. A persistently low fill ratio means the
+    stop-limit band is rarely being caught and is worth reporting, not
+    acting on.
 
 Send ONE Telegram message, always, even on no-action days, <= 15 lines:
   bash scripts/telegram.sh "EOD MMM DD

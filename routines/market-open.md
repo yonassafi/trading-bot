@@ -100,8 +100,18 @@ candidates:
       4c. All inputs come from the bars you already pulled in 4b.
       session_low_T  = lowest LOW among the 09:30 ET bar through the
                        triggering bar, inclusive
-      limit_price    = ORH * 1.0050        (worst-case fill)
-      est_risk_share = limit_price - session_low_T
+
+      TICK ROUNDING — order prices round UP to the nearest $0.01.
+      ceil(x, 0.01) means: math.ceil(x * 100) / 100.
+        stop_price  = ceil(ORH * 1.0005, 0.01)
+        limit_price = ceil(ORH * 1.0050, 0.01)
+        IF limit_price <= stop_price: limit_price = stop_price + 0.01
+      Unrounded, ORH * 1.0005 produces sub-penny prices, which Alpaca
+      rejects on stocks >= $1 — and Section 12 makes an unexplained
+      rejection a halt condition. Section 5 floors price at $5.00, so
+      sub-penny tick increments never apply here.
+
+      est_risk_share = limit_price - session_low_T   (ROUNDED limit)
       Validate BEFORE sending:
       IF est_risk_share <= 0 -> no trade, log INVALID_RISK, next candidate.
       IF est_risk_share > (ADR_20 * limit_price) [ADR_20 is in the
@@ -109,25 +119,52 @@ candidates:
         STOP_TOO_WIDE_PRETRADE, next candidate.
       Size:
       risk_capital = equity * 0.005
-      shares = floor(risk_capital / est_risk_share)
+      intended_qty = floor(risk_capital / est_risk_share)
       cap = floor((equity * 0.20) / limit_price)
-      shares = min(shares, cap)
-      IF shares < 1 -> no trade, log "shares_below_1", next candidate.
+      intended_qty = min(intended_qty, cap)
+      IF intended_qty < 1 -> no trade, log "shares_below_1", next candidate.
 
-  4e. Portfolio-limit pre-check (Section 10) — now checkable before
-      ordering, because shares is known:
-      total_open_risk_pct + (est_risk_share * shares / equity * 100)
-        must stay <= 3.0%, and (shares * limit_price) <= 20% of equity.
+  4e. Portfolio-limit pre-check (Section 10) — checkable before ordering,
+      because intended_qty is known:
+      total_open_risk_pct + (est_risk_share * intended_qty / equity * 100)
+        must stay <= 3.0%, and (intended_qty * limit_price) <= 20% of
+        equity.
       IF either would be breached -> no trade, log the breach, next
       candidate. Do not send the order.
 
-  4f. ORDER (Section 8.4):
-      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"<shares>","side":"buy","type":"stop_limit","stop_price":"<ORH*1.0005>","limit_price":"<ORH*1.0050>","time_in_force":"day"}'
-      Poll `bash scripts/alpaca.sh orders` for up to 60 seconds. If still
-      unfilled after 60 seconds: cancel it (`bash scripts/alpaca.sh
-      cancel ORDER_ID`), log "unfilled_60s", move to the next candidate.
-      Never chase. NEVER re-send for the same symbol the same day, for
-      any reason.
+  4f. ORDER (Section 8.4).
+      FIRST, immediately before submitting, pull the current price
+      (bash scripts/alpaca.sh quote SYM):
+        IF last_trade_price > limit_price -> no trade, log
+          PRICE_RAN_AWAY, move to the next candidate.
+      A price between stop_price and limit_price is FINE — it fills
+      immediately inside the band and risk was sized against
+      limit_price. There is NO re-arming and NO second attempt later in
+      the window; PRICE_RAN_AWAY is a hard skip for the day.
+
+      Every order MUST carry a deterministic client_order_id.
+      scripts/alpaca.sh refuses an order without one. Format:
+        qms01-<YYYY-MM-DD>-<SYMBOL>-entry
+      A retry after an ambiguous timeout would otherwise duplicate the
+      order and double position size — a Section 10 risk-limit breach,
+      not a plumbing annoyance. Alpaca rejects a repeated id, so the
+      duplicate becomes structurally impossible.
+
+      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"<intended_qty>","side":"buy","type":"stop_limit","stop_price":"<stop_price>","limit_price":"<limit_price>","time_in_force":"day","client_order_id":"qms01-<DATE>-<SYM>-entry"}'
+
+      Poll `bash scripts/alpaca.sh orders` for up to 60 seconds, then
+      cancel (`bash scripts/alpaca.sh cancel ORDER_ID`) and read
+      filled_qty from the order.
+
+      PARTIAL FILLS (Section 8.4):
+        IF filled_qty == 0 -> no position, log NO_FILL with
+          intended_qty, filled_qty=0, fill_ratio=0. Next candidate.
+        IF filled_qty >= 1 -> THAT IS THE POSITION. Never top up, never
+          re-send, the symbol is done for the day.
+      From here on use filled_qty everywhere — NOT intended_qty.
+      Record intended_qty, filled_qty and
+      fill_ratio = filled_qty / intended_qty for the log.
+      Never chase. NEVER re-send for the same symbol the same day.
 
   4g. STOP PLACEMENT (Section 8.5) — immediately after fill:
       Pull bars from 09:30 ET through the actual fill time (this is a
@@ -135,15 +172,18 @@ candidates:
       bash scripts/alpaca.sh bars "symbols=SYM&timeframe=5Min&start=<today 09:30 ET as UTC>&end=<now as UTC>&limit=200&feed=iex"
       session_low_F = lowest LOW across that whole range
       STOP = session_low_F
-      Place it immediately as a real stop-market order (Operator
-      Substitutions explains why stop-market, not stop-limit):
-      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"<shares>","side":"sell","type":"stop","stop_price":"<STOP>","time_in_force":"gtc"}'
+      Place it immediately as a real stop-market order for filled_qty
+      ONLY (Operator Substitutions explains why stop-market):
+      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"<filled_qty>","side":"sell","type":"stop","stop_price":"<STOP>","time_in_force":"gtc","client_order_id":"qms01-<DATE>-<SYM>-stop"}'
+      qty MUST be filled_qty, never intended_qty. A resting sell-stop
+      covering shares you do not hold goes SHORT when it triggers, which
+      Binding Constraint #6 (long only) forbids.
       The stop NEVER widens. If the low extends later in the session it
       does not move.
 
   4h. POST-FILL RECONCILIATION (Section 8.6):
       actual_risk_share = fill_price - STOP
-      actual_risk_pct   = (shares * actual_risk_share) / equity
+      actual_risk_pct   = (filled_qty * actual_risk_share) / equity
       IF actual_risk_pct > 0.0075 -> exit immediately at market and log
         RISK_OVERRUN. Cancel the resting stop from 4g FIRST
         (bash scripts/alpaca.sh cancel STOP_ORDER_ID), THEN
@@ -152,29 +192,35 @@ candidates:
         position; move to the next candidate.
       ELSE log planned (est_risk_share) vs actual (actual_risk_share)
         risk and continue.
+      A partial fill carries proportionally LESS risk than planned. That
+      is acceptable and is never topped up.
 
-  4i. Liquidity exclusion (Section 7): IF (shares * fill_price) >
+  4i. Liquidity exclusion (Section 7): IF (filled_qty * fill_price) >
       0.01 * dollar_volume_50d_avg [from the candidate's CANDIDATES.md
       row] -> cancel the resting stop first, then exit immediately at
       market, log the exclusion, do NOT keep the position.
 
   4j. Record the position in memory/POSITIONS.json "open" (entry_date,
       fill_price, initial_stop=STOP, risk_per_share=actual_risk_share,
-      shares, shares_remaining=shares, partial_taken=false,
+      shares=filled_qty, shares_remaining=filled_qty,
+      intended_qty, fill_ratio, partial_taken=false,
       current_stop=STOP, reference_sma_period from the candidate row,
-      sessions_held=0,
+      sessions_held=0, last_managed_date=null,
       entry_mechanism="retrospective_10ET_approximation",
       consolidation_high_ref from the candidate row).
-      Note risk_per_share is the ACTUAL value from 4h, not the 4d
-      estimate — everything downstream (Section 9 stop management,
-      r_multiple, distribution tracking) keys off the real fill.
+      "shares" is filled_qty — the fill IS the position (Section 8.4).
+      risk_per_share is the ACTUAL value from 4h, not the 4d estimate;
+      everything downstream (Section 9 stop management, r_multiple,
+      distribution tracking) keys off the real fill.
 
   4k. Append the entry to memory/TRADE-LOG.md per the format in that
-      file's header. Include both planned and actual risk per share.
+      file's header. Include planned vs actual risk per share, and
+      intended_qty / filled_qty / fill_ratio (Section 11 requires these
+      on every entry ATTEMPT, including NO_FILL and PRICE_RAN_AWAY).
 
   4l. Increment open_count and entries_today_so_far; decrement
       remaining_slots; update total_open_risk_pct using
-      actual_risk_share.
+      actual_risk_share and filled_qty.
 
 STEP 5 — Any rejection at any sub-step gets logged with the symbol and
 the first disqualifying rule — same discipline as the screener.

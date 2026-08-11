@@ -109,18 +109,27 @@ def range_pct(bars, n, index=None):
 
 def find_prior_impulse(bars, index=None, lookback=63, min_gain=0.30,
                         min_h_age=10, max_lh_span=25):
-    """Section 6.1. Search the trailing `lookback` sessions ending at
-    `index` for a low L and later high H where (H/L - 1) >= min_gain, H
-    occurred at least `min_h_age` sessions before `index`, and the span
-    between L and H is <= max_lh_span sessions.
+    """Section 6.1, as amended by the operator 2026-08-11.
 
-    Multiple (L, H) pairs can satisfy these constraints. This picks the
-    pair with the MOST RECENT valid H, because Section 6.2 measures the
-    consolidation window from H to today, and the most recent qualifying
-    high is what's operationally relevant to today's setup. This
-    selection rule is a necessary implementation choice (the spec gives
-    the numeric constraints but not a tie-break), documented in
-    memory/TRADING-STRATEGY.md's Operator Substitutions section.
+    Deterministic single pass — NOT a search over candidate pairs:
+
+        H = highest High in the last `lookback` sessions occurring at
+            least `min_h_age` sessions ago. Ties -> most recent.
+        L = lowest Low in the `max_lh_span` sessions immediately
+            preceding H. Ties -> most recent.
+
+        Validate (H/L - 1) >= min_gain and span(L,H) <= max_lh_span.
+        On failure -> not a candidate. Do NOT look for another pair.
+
+    The previous implementation searched backwards for the most recent
+    qualifying H. Because H can never be newer than `min_h_age`, that H
+    advanced one session per session for as long as price stayed >=30%
+    above any low in the preceding 25 sessions — so the consolidation
+    window measured from H was pinned near `min_h_age + 1` sessions
+    regardless of the real base. Section 6.2's 10-40 test was inert,
+    6.3-6.5 analysed a truncated slice, and 6.7 measured containment
+    against an ordinary base bar instead of the impulse peak. H must be
+    the highest high for 6.7 to mean anything.
 
     Returns (L_index, H_index, L_price, H_price) or None.
     """
@@ -131,16 +140,32 @@ def find_prior_impulse(bars, index=None, lookback=63, min_gain=0.30,
     if latest_h_idx < start:
         return None
 
-    for h_idx in range(latest_h_idx, start - 1, -1):
-        h_price = bars[h_idx]["h"]
-        l_start = max(start, h_idx - max_lh_span)
-        for l_idx in range(h_idx - 1, l_start - 1, -1):
-            l_price = bars[l_idx]["l"]
-            if l_price <= 0:
-                continue
-            if (h_price / l_price - 1.0) >= min_gain:
-                return (l_idx, h_idx, l_price, h_price)
-    return None
+    # H: highest High in [start, latest_h_idx]. Ties -> most recent, so
+    # iterate forwards and take >= (a later equal high replaces an
+    # earlier one).
+    h_idx = start
+    for i in range(start, latest_h_idx + 1):
+        if bars[i]["h"] >= bars[h_idx]["h"]:
+            h_idx = i
+    h_price = bars[h_idx]["h"]
+
+    # L: lowest Low in the max_lh_span sessions immediately preceding H.
+    l_start = max(0, h_idx - max_lh_span)
+    if l_start >= h_idx:
+        return None
+    l_idx = l_start
+    for i in range(l_start, h_idx):
+        if bars[i]["l"] <= bars[l_idx]["l"]:
+            l_idx = i
+    l_price = bars[l_idx]["l"]
+
+    if l_price <= 0:
+        return None
+    if (h_price / l_price - 1.0) < min_gain:
+        return None
+    if (h_idx - l_idx) > max_lh_span:
+        return None
+    return (l_idx, h_idx, l_price, h_price)
 
 
 def segment_min_lows(bars, start_idx, end_idx):
