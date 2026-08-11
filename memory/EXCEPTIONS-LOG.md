@@ -328,3 +328,53 @@ scope is screen, log, commit, and the fix is an operator call. Suggested
 operator fix: drop `parse_mode` from the payload entirely (no alert text
 in this system relies on Markdown rendering), and have callers check the
 wrapper's exit status.
+
+---
+
+## 2026-08-10 21:31 ET — OTHER (duplicate screener section, no trading impact)
+**Routine:** pre-market (run date per `date +%Y-%m-%d` = 2026-08-11)
+**Symbol (if applicable):** n/a
+**What happened:** This pre-market run fired at 01:28 UTC, ~2 minutes
+after the 01:26 UTC run committed as `e4caf24 pre-market screener
+2026-08-11`. Both are off-schedule relative to the deployed cron
+(`0 11 * * 1-5` UTC = 07:00 ET), i.e. manual/immediate triggers, not
+scheduled slots — the same off-hours condition `routines/README.md`
+already documents.
+
+The screener has no idempotency check: `write_candidates_section`
+unconditionally appends. `memory/CANDIDATES.md` therefore now holds
+**two `## 2026-08-11 — Pre-market Screener` sections**. Both re-ran
+against the same EOD bars (last close 2026-08-10) and are identical on
+every field except the Stage B accounting fix landed in `51bc554`
+between them:
+
+```
+regime ONEQ          PASS (10SMA 101.8475 > 20SMA 101.3142, both rising)
+universe             5900
+Stage A survivors     200
+candidates              0
+insufficient_history  189 (first section)  ->  190 (this section)
+```
+
+That single-count delta is the previously logged unaccounted symbol
+(see 2026-08-10 21:25 ET) now being recorded. Rejections in this section
+sum to 5900 = universe, and Stage B sums to 200 = Stage A survivors, so
+the accounting is complete for the first time.
+
+**Rule that doesn't cover this / was ambiguous:** Nothing in
+`memory/TRADING-STRATEGY.md` covers a routine firing twice for the same
+date, and nothing authorises the agent to skip a routine's stated step
+on its own assessment — declining to run `scripts/screener.py` would
+itself have been the judgement call Section 0.3 forbids, so STEP 3 was
+executed as written. Section 12 was considered and does not apply: no
+order, no data-feed gap (both runs agree exactly), no rule conflict.
+
+**Action taken:** none beyond this record. The duplicate section was
+left in place rather than hand-edited — `memory/CANDIDATES.md` is
+engine-written and Section 11 treats it as the daily record; deleting a
+run's output to tidy it is not this routine's call. No trading impact:
+`routines/market-open.md` reads "today's dated section", both sections
+carry zero candidates, and `memory/POSITIONS.json` is empty, so either
+resolution yields the same no-entry outcome. Suggested operator fix:
+have `scripts/screener.py` replace an existing section for the same date
+instead of appending, or refuse to run when one exists.
