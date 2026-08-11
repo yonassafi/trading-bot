@@ -378,3 +378,41 @@ carry zero candidates, and `memory/POSITIONS.json` is empty, so either
 resolution yields the same no-entry outcome. Suggested operator fix:
 have `scripts/screener.py` replace an existing section for the same date
 instead of appending, or refuse to run when one exists.
+
+---
+
+## 2026-08-10 21:33 ET — OTHER (routine push-recovery gap, no trading impact)
+**Routine:** pre-market (run date per `date +%Y-%m-%d` = 2026-08-11)
+**Symbol (if applicable):** n/a
+**What happened:** STEP 6's push was rejected with "a pushed branch tip
+is behind its remote counterpart". The container's fresh clone had left
+the working tree on a **detached HEAD**, not on `main`, so the commit
+landed on no branch. `git status -sb` showed `## HEAD (no branch)`.
+
+The routine's documented recovery — `git pull --rebase origin main, then
+push again` — does **not** fix this. It reported "HEAD is up to date"
+(the rebase had nothing to do; the commit was already on top of
+`origin/main`) and the second push failed identically. Resolved with
+`git checkout -B main HEAD`, then push, which fast-forwarded
+`51bc554..e4cfaaa`. No force-push was used and no commit was discarded.
+
+**Rule that doesn't cover this / was ambiguous:** none — git plumbing is
+deployment mechanics, not a strategy rule, and Section 0.3 is not
+engaged. Logged because every routine's persistence depends on STEP 6
+and the stated fallback silently fails here.
+
+**Action taken:** none beyond the recovery above and this record. The
+routine prompts in `routines/` were not edited — they are the deployed
+production text and changing them is an operator call.
+
+**Why this matters more elsewhere:** pre-market only loses a screen that
+can be re-run. `market-open` commits `memory/TRADE-LOG.md` and
+`memory/POSITIONS.json` after placing real orders, and `daily-summary`
+commits `memory/RISK-STATE.json`. If either hits this and treats the
+`pull --rebase` fallback as sufficient, the orders still exist at Alpaca
+but the position state recording them is lost when the container is
+reclaimed — the next run would then see an empty `POSITIONS.json` beside
+live broker positions. Suggested operator fix: add
+`git rev-parse --abbrev-ref HEAD` (or `git checkout -B main HEAD`) to
+the STEP 6 block of every routine, ahead of the commit, and require the
+push exit status to be checked.
