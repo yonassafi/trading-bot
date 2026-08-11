@@ -1,0 +1,11 @@
+{
+  "sandbox": {
+    "network": {
+      "allowedDomains": [
+        "paper-api.alpaca.markets",
+        "data.alpaca.markets",
+        "api.telegram.org"
+      ]
+    }
+  }
+}
