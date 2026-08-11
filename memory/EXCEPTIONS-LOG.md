@@ -228,3 +228,103 @@ operator fix, on the **routine environment's network policy** (not the
 repo): allow `paper-api.alpaca.markets`, `data.alpaca.markets`, and
 `api.telegram.org`. Until then no routine can screen, trade, manage a
 position, or raise an alert.
+
+---
+
+## 2026-08-10 21:25 ET — UNSPECIFIED_SITUATION
+**Routine:** pre-market (run date per `date +%Y-%m-%d` = 2026-08-11)
+**Symbol (if applicable):** unknown — the symbol itself is not recorded
+anywhere, which is the substance of this entry
+**What happened:** The screener completed successfully (exit 0, egress
+now working — see the recovery note below). Its own rejection counts do
+not fully account for the universe. One symbol was dropped with no
+disqualifying rule recorded:
+
+```
+Universe                        5900
+Stage A rejections (logged)     3460 + 1551 + 500 + 189      = 5700
+Stage A survivors               5900 - 5700                  =  200
+Stage B rejections (logged)     198 momentum + 1 contraction  =  199
+Final candidates                                                   0
+Unaccounted                     200 - 199 - 0                =    1
+```
+
+Source is `scripts/screener.py::stage_b_setup_scan` lines 249-258: a
+Stage-A survivor with fewer than 127 bars, or a `None` 21/63/126-day
+return, hits a bare `continue` and never reaches `rejections`. Stage A
+logs the same condition as `insufficient_history` (line 219); Stage B
+does not log it at all.
+
+**Rule that doesn't cover this / was ambiguous:** Section 11 requires
+"**Per rejection** (`memory/CANDIDATES.md`): symbol, first disqualifying
+rule." One symbol was screened out this run without either being
+recorded. The cause is almost certainly benign and already has a named
+Stage-A equivalent (insufficient price history), but naming it here
+would be the agent deciding what the missing record says, which Section
+0.3 forbids. Section 12's "data feed gap or suspected bad data" was
+considered and judged not to apply: this is an engine logging omission
+on a symbol that was correctly excluded either way, not suspect data
+driving a trading decision, and the run's screening output is otherwise
+complete and internally consistent. No halt was written.
+
+**Action taken:** none — logged only. No candidate list was affected: the
+dropped symbol could not have become a candidate without passing the
+momentum and setup tests it never reached. `scripts/screener.py` was not
+modified; changing an engine mid-routine is outside this routine's scope
+and is an operator decision. Suggested operator fix: give those two
+`continue` statements a `rejections.append((sym, "insufficient_history"))`
+so Stage B accounts the same way Stage A does.
+
+**Also recorded — egress recovered.** The 2026-08-10 entries above
+reported `paper-api.alpaca.markets`, `data.alpaca.markets`, and
+`api.telegram.org` blocked at the proxy with HTTP 403, which aborted
+every routine. All three reached today with no errors. This is the first
+full production screener pass; the two prior aborted runs produced no
+screening data, so `memory/CANDIDATES.md` has no 2026-08-10 section and
+that gap is expected, not missing data.
+
+---
+
+## 2026-08-10 21:26 ET — OTHER (alerting defect, no trading impact)
+**Routine:** pre-market (run date per `date +%Y-%m-%d` = 2026-08-11)
+**Symbol (if applicable):** n/a
+**What happened:** The Step 5 Telegram alert failed on first attempt with
+`curl: (22) ... error: 400`. Unlike the 2026-08-10 entries, this was NOT
+the proxy egress block (that was 403 and is now cleared) — the request
+reached Telegram and Telegram rejected it.
+
+Cause: `scripts/telegram.sh` posts with `'parse_mode': 'Markdown'`. Under
+legacy Markdown, `_` opens an italic span, so any message containing an
+odd number of underscores is rejected with 400 "can't parse entities".
+The first attempt contained the literal token `UNSPECIFIED` + `_` +
+`SITUATION`. Resending the same text with the underscore removed
+succeeded (`"ok":true`, message_id 10).
+
+This is a live alerting hazard, not a cosmetic one. The tokens this
+system is required to raise alarms about are exactly the ones that
+break it:
+
+```
+UNSPECIFIED_SITUATION    Section 0.3 / 11
+STOP_TOO_WIDE            Section 8.5
+RISK-STATE.json, POSITIONS.json, entry_mechanism: ...
+```
+
+An alert naming `STOP_TOO_WIDE` — raised at the moment a position is
+being force-exited — would fail to deliver. `scripts/telegram.sh` uses
+`curl -fsS`, so the failure prints a one-line curl error and returns
+non-zero; a routine that does not check the exit status would treat the
+alert as sent. Callers were not audited this run.
+
+**Rule that doesn't cover this / was ambiguous:** none — Section 11
+requires the events be logged, and they were. Section 12's "any order
+rejected for a reason not understood" does not apply (no order; reason
+understood). Recording it here because a silent alerting failure defeats
+the escalation path every other rule depends on.
+
+**Action taken:** none beyond resending the alert without the underscore,
+and this record. `scripts/telegram.sh` was not modified — this routine's
+scope is screen, log, commit, and the fix is an operator call. Suggested
+operator fix: drop `parse_mode` from the payload entirely (no alert text
+in this system relies on Markdown rendering), and have callers check the
+wrapper's exit status.
