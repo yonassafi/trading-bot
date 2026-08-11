@@ -86,7 +86,10 @@ memory/RISK-STATE.json. Using today's final equity from STEP 2:
 STEP 7 — Compute and append the EOD snapshot to memory/TRADE-LOG.md per
 that file's format:
   Day P&L = today_equity - yesterday's EOD equity (from TRADE-LOG.md tail)
-  Phase P&L = today_equity - starting_equity (10000, or memory/RISK-STATE.json's starting_equity)
+  Phase P&L = today_equity - memory/RISK-STATE.json's starting_equity
+    (read it from the file — do NOT assume a value. The account is
+    funded at 100000, not 10000; an earlier revision of this line
+    carried a wrong hardcoded figure.)
   Open positions count, total open risk % of equity
   Entries today (from STEP 5 / market-open's log), trades this week
 

@@ -119,3 +119,48 @@ timezone to America/New_York, or convert each cron row in
 `routines/README.md` to UTC. The same offset would affect `market-open`
 (10:05 ET) and `daily-summary` (16:10 ET), which do place and manage
 orders.
+
+**RESOLUTION (2026-08-11, operator + agent, local session):** This entry
+is a **false alarm** and is closed. The 21:00 ET firing was a *manual*
+test trigger of `qms01-pre-market` issued from a local session, not a
+scheduled run. The operator's local clock is Europe/Vilnius, where the
+trigger was sent at ~04:00; that is 21:00 ET the previous day.
+
+The deployed cron is correct. Cloud routine crons are UTC-only (no
+timezone field exists), and `qms01-pre-market` is set to `0 11 * * 1-5`
+= 07:00 ET. `routines/README.md` was stale — it still listed the table
+in ET, which is what this run compared itself against. The README has
+now been corrected to show both columns.
+
+The `DATE` observation was real but does not apply to scheduled runs:
+every scheduled slot falls between 11:00 and 21:00 UTC, so the UTC
+calendar date always equals the ET date. Only off-hours manual runs
+trip it. No strategy rule was involved and no parameter was changed.
+
+The egress-block entry above this one remains **OPEN** — that is the
+real blocker.
+
+---
+
+## 2026-08-11 — defect found during post-run audit (no trading impact)
+**Routine:** daily-summary (prompt defect, never executed)
+**Symbol (if applicable):** n/a
+**What happened:** `routines/daily-summary.md` STEP 7 defined Phase P&L
+as `today_equity - starting_equity (10000, or memory/RISK-STATE.json's
+starting_equity)`. The hardcoded `10000` is wrong by 10x: the Alpaca
+paper account is funded at **100000**, and `memory/RISK-STATE.json`
+correctly records `starting_equity: 100000.0`. Had `daily-summary` ever
+run and trusted the parenthetical rather than the file, every Phase P&L
+figure in `memory/TRADE-LOG.md` and every Telegram EOD summary would
+have overstated performance by $90,000.
+
+**Rule that doesn't cover this / was ambiguous:** none — this was a
+prompt authoring error, not a strategy question. Section 14 parameters
+are untouched; starting equity is account state, not a strategy
+parameter.
+
+**Action taken:** Fixed. The line now reads `starting_equity` from
+`memory/RISK-STATE.json` as the sole source and explicitly forbids
+assuming a value. The deployed cloud routine prompt was updated to
+match. Caught before `daily-summary` ever executed, so no logged figure
+is affected and no correction to historical data is needed.

@@ -12,26 +12,65 @@ end-of-day only — so `market-open` fires later than the open, and there
 is no midday trading routine at all. See
 `memory/TRADING-STRATEGY.md`'s "Operator Substitutions" section for why.
 
-## Cron schedule (ET)
+## Cron schedule
 
-| Routine | Cron (ET) | What it does |
-|---|---|---|
-| `pre-market.md` | `0 7 * * 1-5` (07:00) | Runs `scripts/screener.py`: regime check, universe filter, setup scan, ranks candidates. No trading. |
-| `market-open.md` | `5 10 * * 1-5` (10:05) | Must fire strictly after the 09:30-10:00 ET opening-range window closes. Checks the retrospective ORH trigger, sizes, places entries + resting stops. |
-| `midday.md` | Optional / disable | No trading — QMS-01's Section 9 is end-of-day only. If left enabled it's a no-op heartbeat that only alerts if a position is missing its resting stop. Safe to disable entirely. |
-| `daily-summary.md` | `10 16 * * 1-5` (16:10) | Reconciles fills, runs `scripts/position_manager.py` (Section 9.2-9.4), checks the 25%-drawdown halt condition, posts the EOD summary. |
-| `weekly-review.md` | `45 16 * * 5` (Fri 16:45) | Distribution-tracking report only. Never modifies `memory/TRADING-STRATEGY.md`. |
+**Cloud routine crons are UTC only — there is no timezone field.** The ET
+times below are what the strategy specifies; the UTC column is what is
+actually deployed. Minimum interval is 1 hour.
 
-Set these as America/New_York (ET) on the routine, or convert to your
-routine's configured timezone.
+| Routine | ET | Cron (UTC, EDT) | What it does |
+|---|---|---|---|
+| `pre-market.md` | 07:00 Mon-Fri | `0 11 * * 1-5` | Runs `scripts/screener.py`: regime check, universe filter, setup scan, ranks candidates. No trading. |
+| `market-open.md` | 10:05 Mon-Fri | `5 14 * * 1-5` | Must fire strictly after the 09:30-10:00 ET opening-range window closes. Checks the retrospective ORH trigger, sizes, places entries + resting stops. |
+| `midday.md` | 12:30 Mon-Fri | `30 16 * * 1-5` | No trading — QMS-01's Section 9 is end-of-day only. A no-op heartbeat that only alerts if a position is missing its resting stop. Safe to disable entirely. |
+| `daily-summary.md` | 16:10 Mon-Fri | `10 20 * * 1-5` | Reconciles fills, runs `scripts/position_manager.py` (Section 9.2-9.4), checks the 25%-drawdown halt condition, posts the EOD summary. |
+| `weekly-review.md` | Fri 16:45 | `45 20 * * 5` | Distribution-tracking report only. Never modifies `memory/TRADING-STRATEGY.md`. |
+
+### DST is a live hazard, not a nuisance
+
+US DST ends **Sunday Nov 1, 2026**; ET goes from UTC-4 to UTC-5. If the
+UTC crons above are not shifted **+1 hour**, `market-open` fires at 09:05
+ET — an hour *before* the 09:30-10:00 opening range it reads
+retrospectively even exists. EST values:
+
+| Routine | Cron (UTC, EST) |
+|---|---|
+| `pre-market.md` | `0 12 * * 1-5` |
+| `market-open.md` | `5 15 * * 1-5` |
+| `midday.md` | `30 17 * * 1-5` |
+| `daily-summary.md` | `10 21 * * 1-5` |
+| `weekly-review.md` | `45 21 * * 5` |
+
+A one-time routine `qms01-dst-shift-2026-11` is scheduled for
+`2026-11-01T18:00:00Z` to apply this automatically and alert via Telegram
+either way. The reverse shift (EST->EDT, -1 hour) is due **Sunday Mar 14,
+2027** and needs a new one-time routine.
+
+Every scheduled slot lands before 00:00 UTC in both EDT and EST, so
+`DATE=$(date +%Y-%m-%d)` inside the UTC container always equals the ET
+calendar date. An off-hours *manual* run does not have that property and
+will stamp tomorrow's date — expect a spurious "schedule
+misconfiguration" exception if you trigger one late in the evening ET.
 
 ## One-time prerequisites
 
 1. **Install the Claude GitHub App** on this repo (least privilege — this
    repo only).
-2. **Enable "Allow unrestricted branch pushes"** in each routine's
-   environment settings — without it `git push origin main` silently
-   fails with a proxy error.
+2. **Allow network egress to these hosts** in the routine environment's
+   network policy:
+   - `paper-api.alpaca.markets`
+   - `data.alpaca.markets`
+   - `api.telegram.org`
+
+   Verified 2026-08-11: the sandbox proxy refuses CONNECT to all three
+   with a 403 org egress policy by default. Until they are allowlisted no
+   routine can trade, manage a position, **or raise an alert** — the
+   Telegram block means a failure on a live position leaves no trace
+   outside this repo. `github.com` is already permitted (push works).
+
+   (An older revision of this file listed "Allow unrestricted branch
+   pushes" as prerequisite #2. That setting no longer exists in the
+   console and push works without it. Removed.)
 3. **Set environment variables on the routine itself** (not `.env` — no
    `.env` exists in cloud mode):
    - `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` (required)
@@ -63,7 +102,7 @@ close nothing, report"). Only a human clears it, via the local
 | Symptom | Cause | Fix |
 |---|---|---|
 | "Repository not accessible" | GitHub App not installed | Install it, grant access to this repo |
-| `git push` fails, proxy/permission error | "Allow unrestricted branch pushes" is off | Enable it in the routine's environment |
+| `connect_rejected <host>:443` / proxy 403 on any Alpaca or Telegram call | Environment network policy blocks egress | Allowlist the three hosts in prerequisite #2. Do not work around it by changing data sources — Alpaca is not substitutable |
 | `scripts/alpaca.sh order ...` refuses with "REFUSING: ... not the paper-trading endpoint" | `ALPACA_ENDPOINT` points at the live API | This is the safety guard working correctly — fix the env var, don't bypass the script |
 | `ALPACA_API_KEY not set` | Env var missing from routine env | Add it in the routine config, not `.env` |
 | Routine did nothing and logged `UNSPECIFIED_SITUATION` | A situation genuinely isn't covered by `memory/TRADING-STRATEGY.md` | This is correct behavior per Section 0.3 — read the exception, decide manually, do not "fix" the routine into guessing |
