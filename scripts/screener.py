@@ -235,14 +235,21 @@ def load_position_symbols():
     return open_syms, recent_stopouts
 
 
-def stage_a_filter(universe, equity, feed=None):
-    """Section 5 price/liquidity/ADR filter, ~50-day bars, whole universe."""
+def stage_a_filter(universe, equity, feed=None, bars_provider=None):
+    """Section 5 price/liquidity/ADR filter, ~50-day bars, whole universe.
+
+    bars_provider(symbols, days) -> {sym: [bar, ...]} lets a caller supply
+    bars from somewhere other than the live API. scripts/backtest.py passes
+    a provider that returns bars truncated to the simulated session, so the
+    backtest and the live screener execute the SAME Section 5 code rather
+    than two copies of it that can drift apart."""
+    provider = bars_provider or (lambda syms, days: fetch_bars_batch(syms, days, feed=feed))
     survivors = []
     rejections = []
     batch_size = 150
     for i in range(0, len(universe), batch_size):
         batch = universe[i:i + batch_size]
-        bars_map = fetch_bars_batch(batch, days=75, feed=feed)
+        bars_map = provider(batch, 75)
         for sym in batch:
             bars = bars_map.get(sym, [])
             if len(bars) < 50:
@@ -264,7 +271,8 @@ def stage_a_filter(universe, equity, feed=None):
     return survivors, rejections
 
 
-def stage_b_setup_scan(survivor_symbols, open_syms, recent_stopouts, feed=None):
+def stage_b_setup_scan(survivor_symbols, open_syms, recent_stopouts, feed=None,
+                        bars_provider=None):
     """Section 5 momentum percentile (population = Stage-A survivors,
     operator decision) + Section 6 setup scan + Section 7 exclusions that
     don't require today's open."""
@@ -272,7 +280,8 @@ def stage_b_setup_scan(survivor_symbols, open_syms, recent_stopouts, feed=None):
     full_bars = {}
     for i in range(0, len(survivor_symbols), batch_size):
         batch = survivor_symbols[i:i + batch_size]
-        bars_map = fetch_bars_batch(batch, days=200, feed=feed)
+        bars_map = (bars_provider or
+                    (lambda syms, days: fetch_bars_batch(syms, days, feed=feed)))(batch, 200)
         full_bars.update(bars_map)
 
     returns_21, returns_63, returns_126 = {}, {}, {}
