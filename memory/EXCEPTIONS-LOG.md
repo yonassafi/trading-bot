@@ -164,3 +164,67 @@ parameter.
 assuming a value. The deployed cloud routine prompt was updated to
 match. Caught before `daily-summary` ever executed, so no logged figure
 is affected and no correction to historical data is needed.
+
+---
+
+## 2026-08-10 21:14 ET — UNSPECIFIED_SITUATION (recurrence)
+**Routine:** pre-market (run date per `date +%Y-%m-%d` = 2026-08-11;
+UTC timestamp 2026-08-11T01:14Z)
+**Symbol (if applicable):** n/a
+**What happened:** Identical failure to the `2026-08-10 21:00 ET`
+UNSPECIFIED_SITUATION above, which remains **OPEN**.
+`scripts/screener.py` exited 1 on its first Alpaca call:
+
+```
+RuntimeError: alpaca.sh account failed: curl: (22) The requested URL
+returned error: 403
+  screener.py:419 main() -> :189 account_equity() -> :96 run_alpaca()
+```
+
+Proxy status confirms org-policy CONNECT denial, freshly recorded for
+this run — both the data host and the alert host:
+
+```
+2026-08-11T01:14:05Z connect_rejected paper-api.alpaca.markets:443
+2026-08-11T01:14:22Z connect_rejected api.telegram.org:443
+  "detail": "gateway answered 403 to CONNECT (policy denial or
+             upstream failure)"
+```
+
+Env vars: all four present and set. Halt check: exit 0.
+`memory/HALT.md` absent. Zero screening performed — no regime value, no
+universe, no candidates, no rejection counts, so no dated section was
+written to `memory/CANDIDATES.md` this run. Nothing re-derived by hand.
+
+**This run answers the open question from commit `df0b228`.** That
+commit added `sandbox.network.allowedDomains` for the three hosts to
+`.claude/settings.json` and stated: "If the block is an org-managed
+policy with allowManagedDomainsOnly set, this will have no effect and
+the domains must be allowed on the routine environment instead.
+Re-running qms01-pre-market distinguishes the two." It re-ran. The
+repository-level allowlist had **no effect** — the 403s are unchanged.
+So the block is **not** the Claude Code sandbox prompt-allowlist; it is
+the routine environment's / org's egress network policy. Fixing it in
+the repo is not possible. It must be changed on the routine environment
+itself.
+
+**Rule that doesn't cover this / was ambiguous:** unchanged from the
+entry above — Section 12 lists "data feed gap or suspected bad data" as
+a HALT condition, but this is an infrastructure egress block returning
+*no* data rather than suspect data, and the routine's own failure path
+specifies only log + alert + STOP, not creating `memory/HALT.md`.
+Writing a halt on the agent's own reading of Section 12 would be
+deciding an uncovered case, so it was again not done. Operator still to
+decide whether this class of failure should halt. No orders were
+possible either way — this routine never trades, and
+`memory/POSITIONS.json` is empty.
+
+**Alert channel still down.** The Step 5 Telegram alert could not be
+delivered; `api.telegram.org` returned the same proxy 403. Notification
+for this run went out via the routine-run push notification only.
+
+**Action taken:** none (screening abandoned for this run). Required
+operator fix, on the **routine environment's network policy** (not the
+repo): allow `paper-api.alpaca.markets`, `data.alpaca.markets`, and
+`api.telegram.org`. Until then no routine can screen, trade, manage a
+position, or raise an alert.
