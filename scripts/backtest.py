@@ -64,6 +64,7 @@ import screener                    # noqa: E402  (rule code, reused verbatim)
 ROOT = Path(__file__).resolve().parent.parent
 ALPACA_SH = ROOT / "scripts" / "alpaca.sh"
 CACHE = ROOT / ".backtest-cache"
+FAILED_BATCHES = []
 
 # Section 14 parameters. Read, never tuned — a backtest that adjusts these
 # to improve its own output is curve fitting, which Constraint #4 forbids.
@@ -93,38 +94,93 @@ def alpaca_bars(qs):
 
 
 def fetch_daily_history(symbols, start, end):
-    """Bulk daily bars for the whole backtest window, fetched ONCE and
-    cached on disk. Per-session re-fetching would be thousands of calls
-    for identical data."""
+    """Bulk daily bars, cached PER BATCH so a failure costs one batch and
+    not the whole run. The first full-universe attempt lost ~20 minutes of
+    completed work to a single timeout at symbol 5520/5910."""
     CACHE.mkdir(exist_ok=True)
-    key = CACHE / f"daily_{start}_{end}_{len(symbols)}.json"
-    if key.exists():
-        print(f"  cache hit: {key.name}", file=sys.stderr)
-        return json.loads(key.read_text())
-
-    out = {}
-    # 40, not 100. A 100-symbol x 500-session request is ~500KB+ and was
-    # timing out mid-transfer during the first full-universe run.
     B = 40
+    out = {}
     for i in range(0, len(symbols), B):
         batch = symbols[i:i + B]
-        tok = None
-        while True:
-            qs = (f"symbols={','.join(batch)}&timeframe=1Day&start={start}"
-                  f"&end={end}&limit=10000&adjustment=split&feed=sip")
-            if tok:
-                qs += f"&page_token={tok}"
-            d = alpaca_bars(qs)
-            for s, bars in (d.get("bars") or {}).items():
-                out.setdefault(s, []).extend(bars)
-            tok = d.get("next_page_token")
-            if not tok:
-                break
-        print(f"  daily {i + len(batch)}/{len(symbols)}", file=sys.stderr)
-    for s in out:
-        out[s].sort(key=lambda b: b["t"])
-    key.write_text(json.dumps(out))
+        bkey = CACHE / f"d_{start}_{end}_{i}_{len(batch)}.json"
+        if bkey.exists():
+            for s_, bars in json.loads(bkey.read_text()).items():
+                out.setdefault(s_, []).extend(bars)
+            continue
+        got, tok = {}, None
+        try:
+            while True:
+                qs = (f"symbols={','.join(batch)}&timeframe=1Day&start={start}"
+                      f"&end={end}&limit=10000&adjustment=split&feed=sip")
+                if tok:
+                    qs += f"&page_token={tok}"
+                d = alpaca_bars(qs)
+                for s_, bars in (d.get("bars") or {}).items():
+                    got.setdefault(s_, []).extend(bars)
+                tok = d.get("next_page_token")
+                if not tok:
+                    break
+        except Exception as e:                                  # noqa: BLE001
+            # One slow batch must not abort the run. Record the gap
+            # loudly — a silently missing symbol would look like "no
+            # setups" rather than "no data", which is the failure mode
+            # that already produced one plausible-but-wrong result today.
+            print(f"  BATCH {i} FAILED, skipping {len(batch)} symbols: "
+                  f"{str(e)[:120]}", file=sys.stderr)
+            FAILED_BATCHES.append((i, len(batch), str(e)[:200]))
+            bkey.write_text(json.dumps({}))
+            continue
+        bkey.write_text(json.dumps(got))
+        for s_, bars in got.items():
+            out.setdefault(s_, []).extend(bars)
+        if (i // B) % 10 == 0:
+            print(f"  daily {i + len(batch)}/{len(symbols)}", file=sys.stderr)
+    for s_ in out:
+        out[s_].sort(key=lambda b: b["t"])
     return out
+
+
+def prefilter_universe(universe, keep_dollar_vol=5_000_000):
+    """Reduce the fetch set using ONE recent 75-day snapshot.
+
+    5910 symbols x ~500 sessions is roughly 3M bars; the API will not
+    serve that in a single sweep. Symbols that cannot clear HALF of
+    Section 5's $10M dollar-volume floor today are dropped before the
+    historical pull.
+
+    BIAS INTRODUCED, disclosed in the report: a symbol that was liquid
+    during the test window but is illiquid today is excluded. That is the
+    same DIRECTION as the survivorship bias already present. The
+    threshold is deliberately half of Section 5's so the margin is wide.
+    The opposite direction is harmless — Stage A is still re-evaluated
+    per session, so a symbol liquid today but not then is rejected then.
+    """
+    print(f"Pre-filtering {len(universe)} symbols on recent liquidity...",
+          file=sys.stderr)
+    now = datetime.now(timezone.utc)
+    e = (now - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    st = (now - timedelta(days=110)).date().isoformat()
+    keep = []
+    B = 100
+    for i in range(0, len(universe), B):
+        batch = universe[i:i + B]
+        try:
+            d = alpaca_bars(f"symbols={','.join(batch)}&timeframe=1Day"
+                            f"&start={st}&end={e}&limit=10000&feed=sip")
+        except Exception:                                       # noqa: BLE001
+            continue
+        for s_, bars in (d.get("bars") or {}).items():
+            if len(bars) < 50:
+                continue
+            bars.sort(key=lambda b: b["t"])
+            if bars[-1]["c"] < 5.00:
+                continue
+            dv = ind.dollar_volume_avg(bars, period=50)
+            if dv and dv >= keep_dollar_vol:
+                keep.append(s_)
+    print(f"  {len(keep)} symbols clear ${keep_dollar_vol:,.0f}/day today",
+          file=sys.stderr)
+    return sorted(keep)
 
 
 def fetch_opening_range(symbol, day):
@@ -247,6 +303,7 @@ def run(start, end, universe_limit, out_path):
     # empty bar list and fails every single session, silently producing a
     # zero-trade backtest that looks like "the strategy never qualified"
     # rather than "the harness never fetched the index".
+    universe = prefilter_universe(universe)
     fetch_syms = list(dict.fromkeys(universe + [screener.REGIME_PROXY]))
     daily = fetch_daily_history(fetch_syms, hist_start, end)
     if not daily.get(screener.REGIME_PROXY):
@@ -400,6 +457,7 @@ def _report(equity, peak, closed, open_pos, rejects, n_sessions,
         "largest_winning_r": round(max(rs), 2) if rs else None,
         "pct_profit_from_best_trade": round(best / sum(profits) * 100, 1) if profits else None,
         "rejection_counts": dict(sorted(rejects.items(), key=lambda x: (-x[1], x[0]))),
+        "failed_data_batches": len(FAILED_BATCHES),
         "trades": closed,
         "BIASES": [
             "Survivorship: universe is TODAY's tradable list; delisted "
@@ -409,6 +467,9 @@ def _report(equity, peak, closed, open_pos, rejects, n_sessions,
             "No sector cap (Section 10) — same as live.",
             "Fills modelled at the decision-bar close, no slippage or "
             "commission. Optimistic by well under 1% per trade.",
+            "Universe pre-filtered on TODAY's liquidity (>= $5M/day, half "
+            "of Section 5's floor). A symbol liquid during the window but "
+            "illiquid now is excluded — same direction as survivorship.",
         ],
     }
     Path(out_path).write_text(json.dumps(rep, indent=2))
