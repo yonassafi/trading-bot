@@ -72,3 +72,22 @@ If the two hashes differ the push did NOT land and this run's work is
 lost when the container is reclaimed — say so loudly in your final
 report. On push failure: git pull --rebase origin main, then push again.
 Never force-push.
+
+CONFLICT DURING `git pull --rebase` — do NOT improvise inside the
+compliance record. The prompts previously said only "pull --rebase, then
+push again", which leaves an agent resolving a conflict by judgement in
+exactly the files that are meant to be evidence.
+
+- memory/EXCEPTIONS-LOG.md, memory/TRADE-LOG.md, memory/CANDIDATES.md
+  and memory/WEEKLY-REVIEW.md are APPEND-ONLY. A conflict there means
+  another run appended too. Keep BOTH sides, in chronological order.
+  Never drop, reword or overwrite another run's entry.
+
+- memory/POSITIONS.json and memory/RISK-STATE.json are STATE, not logs.
+  A conflict means two runs disagree about live positions or peak
+  equity, and no rule resolves that. STOP: do not merge, do not
+  force-push, leave origin/main untouched. Log UNSPECIFIED_SITUATION
+  quoting BOTH versions, send one Telegram alert, and end the run
+  reporting that the push did not land. A wrong merge here silently
+  corrupts position state and the drawdown baseline that Section 12's
+  halt check depends on.

@@ -4,9 +4,15 @@ optimise or adjust any strategy parameter, including in response to this
 week's results — do not touch memory/TRADING-STRATEGY.md from this
 routine, regardless of what the numbers show.
 
-You are running the Friday weekly-review workflow. Fires at 16:45 ET
+You are running the Friday weekly-review workflow. Fires at 17:15 ET
 Friday, after that day's daily-summary has already committed. Resolve
 today's date via: DATE=$(date +%Y-%m-%d).
+
+(Moved from 16:45 on 2026-08-11, following daily-summary's move from
+16:10 to 16:30. This routine reads that day's committed EOD snapshot, so
+it must stay comfortably behind it; 45 minutes leaves room for a slow
+position-management run without the two overlapping and racing on the
+same push.)
 
 IMPORTANT — ENVIRONMENT VARIABLES:
 - ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_ENDPOINT, ALPACA_DATA_ENDPOINT,
@@ -88,3 +94,22 @@ report. On push failure: git pull --rebase origin main, then push again.
 Never force-push. Note: unlike the old strategy's weekly-review, this
 NEVER also commits memory/TRADING-STRATEGY.md — that file is never
 touched by an automated routine.
+
+CONFLICT DURING `git pull --rebase` — do NOT improvise inside the
+compliance record. The prompts previously said only "pull --rebase, then
+push again", which leaves an agent resolving a conflict by judgement in
+exactly the files that are meant to be evidence.
+
+- memory/EXCEPTIONS-LOG.md, memory/TRADE-LOG.md, memory/CANDIDATES.md
+  and memory/WEEKLY-REVIEW.md are APPEND-ONLY. A conflict there means
+  another run appended too. Keep BOTH sides, in chronological order.
+  Never drop, reword or overwrite another run's entry.
+
+- memory/POSITIONS.json and memory/RISK-STATE.json are STATE, not logs.
+  A conflict means two runs disagree about live positions or peak
+  equity, and no rule resolves that. STOP: do not merge, do not
+  force-push, leave origin/main untouched. Log UNSPECIFIED_SITUATION
+  quoting BOTH versions, send one Telegram alert, and end the run
+  reporting that the push did not land. A wrong merge here silently
+  corrupts position state and the drawdown baseline that Section 12's
+  halt check depends on.

@@ -77,17 +77,26 @@ STEP 4 — For each ranked candidate in today's CANDIDATES.md, in rank
 order, until you've placed remaining_slots entries or run out of
 candidates:
 
-  4a. Gap exclusion (Section 7 — only checkable now that the market has
-      opened): pull today's first daily bar / current quote via
-      `bash scripts/alpaca.sh quote SYM`. If today's open > 1.05 x
-      yesterday's close (yesterday's close is in the candidate's
-      CANDIDATES.md row): reject this candidate, log the rejection, move
-      to the next candidate.
-
-  4b. Opening range: pull 09:30-10:00 ET 5-minute bars:
+  4a. Opening range — pull this FIRST; 4b depends on it:
       bash scripts/alpaca.sh bars "symbols=SYM&timeframe=5Min&start=<today 09:30 ET as UTC>&end=<today 10:00 ET as UTC>&limit=20&feed=iex"
-      (feed=iex: confirmed free-tier Alpaca account — the default/SIP feed 403s.)
       ORH = high of the FIRST bar (09:30-09:35 ET).
+      today_open = OPEN of that same first bar.
+      (feed=iex here, deliberately. SIP is available free but only
+      OUTSIDE a ~15-minute delay, and at 10:05 ET the 09:55-10:00 bar is
+      ~5 minutes old — a SIP request covering it fails. The screener uses
+      SIP because it reads completed prior sessions where the delay never
+      binds. Do not "fix" this to sip without also moving the routine's
+      fire time, which is a Section 8.2 change and not yours to make.)
+
+  4b. Gap exclusion (Section 7): today_open comes from 4a's FIRST bar —
+      the actual 09:30 session open. Do NOT use `alpaca.sh quote`, which
+      returns the CURRENT price: by 10:05 that is up to 35 minutes of
+      drift away from the open and answers a different question. A stock
+      that opened +7% (must be excluded) and faded to +3% would pass;
+      one that opened +2% and ran to +6% would be wrongly excluded.
+      IF today_open > 1.05 x yesterday's close (yesterday's close is in
+      the candidate's CANDIDATES.md row): reject this candidate, log the
+      rejection, move to the next candidate.
 
   4c. Trigger (Section 8.2, retrospective approximation): scan the bars
       from 09:35 to 10:00 ET in order. Find the FIRST bar whose price
@@ -97,7 +106,7 @@ candidates:
 
   4d. PRE-TRADE SIZING (Section 8.3) — everything here is computed
       BEFORE any order is sent. T = the close of the triggering bar from
-      4c. All inputs come from the bars you already pulled in 4b.
+      4c. All inputs come from the bars you already pulled in 4a.
       session_low_T  = lowest LOW among the 09:30 ET bar through the
                        triggering bar, inclusive
 
@@ -259,3 +268,22 @@ share count, fill price and stop, so the positions are recoverable by
 hand. Skip commit only if truly nothing changed (regime FAIL and zero
 candidates). On push failure: git pull --rebase origin main, then push
 again. Never force-push.
+
+CONFLICT DURING `git pull --rebase` — do NOT improvise inside the
+compliance record. The prompts previously said only "pull --rebase, then
+push again", which leaves an agent resolving a conflict by judgement in
+exactly the files that are meant to be evidence.
+
+- memory/EXCEPTIONS-LOG.md, memory/TRADE-LOG.md, memory/CANDIDATES.md
+  and memory/WEEKLY-REVIEW.md are APPEND-ONLY. A conflict there means
+  another run appended too. Keep BOTH sides, in chronological order.
+  Never drop, reword or overwrite another run's entry.
+
+- memory/POSITIONS.json and memory/RISK-STATE.json are STATE, not logs.
+  A conflict means two runs disagree about live positions or peak
+  equity, and no rule resolves that. STOP: do not merge, do not
+  force-push, leave origin/main untouched. Log UNSPECIFIED_SITUATION
+  quoting BOTH versions, send one Telegram alert, and end the run
+  reporting that the push did not land. A wrong merge here silently
+  corrupts position state and the drawdown baseline that Section 12's
+  halt check depends on.

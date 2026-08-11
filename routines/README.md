@@ -23,8 +23,8 @@ actually deployed. Minimum interval is 1 hour.
 | `pre-market.md` | 07:00 Mon-Fri | `0 11 * * 1-5` | Runs `scripts/screener.py`: regime check, universe filter, setup scan, ranks candidates. No trading. |
 | `market-open.md` | 10:05 Mon-Fri | `5 14 * * 1-5` | Must fire strictly after the 09:30-10:00 ET opening-range window closes. Checks the retrospective ORH trigger, sizes, places entries + resting stops. |
 | `midday.md` | 12:30 Mon-Fri | `30 16 * * 1-5` | No trading — QMS-01's Section 9 is end-of-day only. A no-op heartbeat that only alerts if a position is missing its resting stop. Safe to disable entirely. |
-| `daily-summary.md` | 16:10 Mon-Fri | `10 20 * * 1-5` | Reconciles fills, runs `scripts/position_manager.py` (Section 9.2-9.4), checks the 25%-drawdown halt condition, posts the EOD summary. |
-| `weekly-review.md` | Fri 16:45 | `45 20 * * 5` | Distribution-tracking report only. Never modifies `memory/TRADING-STRATEGY.md`. |
+| `daily-summary.md` | 16:30 Mon-Fri | `30 20 * * 1-5` | Reconciles fills, runs `scripts/position_manager.py` (Section 9.2-9.4), checks the 25%-drawdown halt condition, posts the EOD summary. |
+| `weekly-review.md` | Fri 17:15 | `15 21 * * 5` | Distribution-tracking report only. Never modifies `memory/TRADING-STRATEGY.md`. |
 
 ### DST is a live hazard, not a nuisance
 
@@ -38,8 +38,8 @@ retrospectively even exists. EST values:
 | `pre-market.md` | `0 12 * * 1-5` |
 | `market-open.md` | `5 15 * * 1-5` |
 | `midday.md` | `30 17 * * 1-5` |
-| `daily-summary.md` | `10 21 * * 1-5` |
-| `weekly-review.md` | `45 21 * * 5` |
+| `daily-summary.md` | `30 21 * * 1-5` |
+| `weekly-review.md` | `15 22 * * 5` |
 
 A one-time routine `qms01-dst-shift-2026-11` is scheduled for
 `2026-11-01T18:00:00Z` to apply this automatically and alert via Telegram

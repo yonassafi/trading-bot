@@ -5,7 +5,16 @@ memory/TRADING-STRATEGY.md, take no action and log UNSPECIFIED_SITUATION.
 
 You are running the END-OF-DAY workflow: reconciliation, Section 9
 position management, drawdown/halt check, and the daily summary. Fires
-at 16:10 ET, after the close, with a buffer for the daily bar to settle.
+at 16:30 ET, after the close.
+
+The 16:30 slot (moved from 16:10 on 2026-08-11) is load-bearing:
+scripts/position_manager.py reads SIP bars and Alpaca's free plan only
+serves SIP outside a ~15-minute delay, so it requests data up to
+now-20min. At 16:10 ET that cutoff is 15:50 — before the close — and
+today's daily bar would not exist, so its "latest bar must be today"
+guard would block ALL position management, every day. Section 9 says
+"evaluated daily after the close" and pins no clock time, so this is a
+deployment setting, not a strategy parameter.
 Resolve today's date via: DATE=$(date +%Y-%m-%d).
 
 IMPORTANT — ENVIRONMENT VARIABLES:
@@ -46,6 +55,35 @@ file's format. If you cannot find a matching filled order for a symbol
 that's missing from live positions, that's an UNSPECIFIED_SITUATION —
 log it, do not guess the exit price.
 
+STEP 3b — REVERSE RECONCILIATION (orphans). STEP 3 only handles "in
+POSITIONS.json but gone at the broker". The opposite direction has no
+rule anywhere, and it is the exact state produced by market-open dying
+between a fill and its commit — orders exist at Alpaca, the file that
+records them never landed.
+
+  (i) LIVE POSITION NOT IN THE FILE. For every symbol in
+      `alpaca.sh positions` with no entry in memory/POSITIONS.json
+      "open": log UNSPECIFIED_SITUATION naming the symbol, quantity,
+      average entry price, and whether a resting stop exists for it.
+      Send a Telegram alert. Do NOT invent a position record (you cannot
+      know its ORH, initial stop, risk_per_share or reference SMA, and
+      guessing them would corrupt every downstream r_multiple and the
+      Section 11 distribution record). Do NOT exit it either — Section
+      12 says "close nothing". Report and leave it.
+
+  (ii) ORPHANED OR MISMATCHED RESTING STOP. Cross-check every open
+      sell-stop order in `alpaca.sh orders` against POSITIONS.json:
+        - a stop whose symbol has NO open position at all
+        - a stop whose qty EXCEEDS the position's shares_remaining
+      Either one will go SHORT when it triggers, which Binding
+      Constraint #6 (long only) forbids. Log UNSPECIFIED_SITUATION with
+      the order id, symbol, stop qty and the position's actual
+      shares_remaining, and send a Telegram alert naming it explicitly
+      as a long-only breach risk.
+      Do NOT cancel it on your own initiative — no rule authorises that,
+      and an unprotected position is its own hazard. This is a genuine
+      gap in the spec: escalate it, do not resolve it.
+
 STEP 4 — Run Section 9.2-9.4 position management on whatever remains open:
   python3 scripts/position_manager.py
 It prints JSON with three keys:
@@ -68,11 +106,15 @@ on it and carry the exception into memory/EXCEPTIONS-LOG.md.
 STEP 5 — Execute each action from STEP 4's output, in the order given,
 via scripts/alpaca.sh:
 - partial_sell: market sell the given qty
-  (bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N","side":"sell","type":"market","time_in_force":"day"}')
+  (bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N","side":"sell","type":"market","time_in_force":"day","client_order_id":"qms01-<DATE>-<SYM>-partial"}')
 - replace_stop: cancel the existing resting stop order for that symbol
   (bash scripts/alpaca.sh cancel ORDER_ID), then place a new stop-market
   order at new_stop for the remaining shares
-  (bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N","side":"sell","type":"stop","stop_price":"X.XX","time_in_force":"gtc"}')
+  (bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N","side":"sell","type":"stop","stop_price":"X.XX","time_in_force":"gtc","client_order_id":"qms01-<DATE>-<SYM>-stop2"}')
+  ORDER MATTERS: cancel the old stop BEFORE placing the new one. Two
+  live stops on the same shares would sell twice — short, per Constraint
+  #6 — if both trigger. If the cancel fails, do NOT place the new stop:
+  log UNSPECIFIED_SITUATION and leave the existing stop in place.
 - full_exit: market sell the remaining shares, then compute r_multiple
   and days_held using the actual fill price, move the position from
   "open" to "closed" in memory/POSITIONS.json (exit_rule from the
@@ -161,3 +203,22 @@ If the two hashes differ the push did NOT land: send a Telegram alert
 saying so explicitly and include the equity figure and any position
 state changes, so they can be reconstructed by hand. On push failure:
 git pull --rebase origin main, then push again. Never force-push.
+
+CONFLICT DURING `git pull --rebase` — do NOT improvise inside the
+compliance record. The prompts previously said only "pull --rebase, then
+push again", which leaves an agent resolving a conflict by judgement in
+exactly the files that are meant to be evidence.
+
+- memory/EXCEPTIONS-LOG.md, memory/TRADE-LOG.md, memory/CANDIDATES.md
+  and memory/WEEKLY-REVIEW.md are APPEND-ONLY. A conflict there means
+  another run appended too. Keep BOTH sides, in chronological order.
+  Never drop, reword or overwrite another run's entry.
+
+- memory/POSITIONS.json and memory/RISK-STATE.json are STATE, not logs.
+  A conflict means two runs disagree about live positions or peak
+  equity, and no rule resolves that. STOP: do not merge, do not
+  force-push, leave origin/main untouched. Log UNSPECIFIED_SITUATION
+  quoting BOTH versions, send one Telegram alert, and end the run
+  reporting that the push did not land. A wrong merge here silently
+  corrupts position state and the drawdown baseline that Section 12's
+  halt check depends on.

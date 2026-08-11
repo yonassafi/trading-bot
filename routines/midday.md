@@ -27,15 +27,32 @@ If non-zero: Telegram alert with the reason, then STOP.
 STEP 2 — Read memory/POSITIONS.json "open" and pull live orders:
   bash scripts/alpaca.sh orders
 
-STEP 3 — For each open position, confirm a resting stop-type order
-exists for that symbol among the open orders. If ANY open position is
-missing its resting stop: this is a genuine problem (Section 12: "any
-situation where you feel the need to deviate from a rule" / a stop
-should always be present). Log UNSPECIFIED_SITUATION to
-memory/EXCEPTIONS-LOG.md naming the symbol, and send one Telegram alert.
-Do NOT place a replacement stop yourself from this routine — that
-decision belongs to daily-summary's reconciliation step, which has the
-full Section 9 context. This routine only detects and reports.
+STEP 3 — Cross-check POSITIONS.json against the live orders BOTH ways.
+Also pull live positions for the reverse direction:
+  bash scripts/alpaca.sh positions
+
+  (a) MISSING STOP. Every open position must have a resting stop-type
+      order. If any does not: Section 12 territory (a stop should always
+      be present). Log UNSPECIFIED_SITUATION naming the symbol, send one
+      Telegram alert.
+
+  (b) STOP QTY MISMATCH. A stop whose qty EXCEEDS that position's
+      shares_remaining will go SHORT when it triggers — Binding
+      Constraint #6 (long only) forbids that. Log UNSPECIFIED_SITUATION
+      with the order id, stop qty and actual shares_remaining, and alert
+      naming it as a long-only breach risk. A stop qty BELOW
+      shares_remaining leaves part of the position unprotected — log and
+      alert that too.
+
+  (c) ORPHANS. A live Alpaca position with no entry in POSITIONS.json,
+      or a resting sell-stop for a symbol with no open position at all.
+      Both indicate a run that placed orders and failed to persist.
+      Log UNSPECIFIED_SITUATION and alert.
+
+Do NOT place, modify, or cancel ANY order from this routine — not a
+replacement stop, not a cancellation of an orphan. That decision belongs
+to daily-summary's reconciliation, which has the full Section 9 context.
+This routine only detects and reports.
 
 STEP 4 — No other action. No file writes besides
 memory/EXCEPTIONS-LOG.md if STEP 3 found something.
@@ -52,3 +69,22 @@ STEP 5 — COMMIT AND PUSH only if memory/EXCEPTIONS-LOG.md changed:
   git fetch origin && git rev-parse HEAD origin/main
 Otherwise skip the commit entirely — this routine usually changes
 nothing. Never force-push.
+
+CONFLICT DURING `git pull --rebase` — do NOT improvise inside the
+compliance record. The prompts previously said only "pull --rebase, then
+push again", which leaves an agent resolving a conflict by judgement in
+exactly the files that are meant to be evidence.
+
+- memory/EXCEPTIONS-LOG.md, memory/TRADE-LOG.md, memory/CANDIDATES.md
+  and memory/WEEKLY-REVIEW.md are APPEND-ONLY. A conflict there means
+  another run appended too. Keep BOTH sides, in chronological order.
+  Never drop, reword or overwrite another run's entry.
+
+- memory/POSITIONS.json and memory/RISK-STATE.json are STATE, not logs.
+  A conflict means two runs disagree about live positions or peak
+  equity, and no rule resolves that. STOP: do not merge, do not
+  force-push, leave origin/main untouched. Log UNSPECIFIED_SITUATION
+  quoting BOTH versions, send one Telegram alert, and end the run
+  reporting that the push did not land. A wrong merge here silently
+  corrupts position state and the drawdown baseline that Section 12's
+  halt check depends on.
