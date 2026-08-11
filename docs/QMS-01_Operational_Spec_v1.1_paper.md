@@ -244,44 +244,69 @@ threshold.
 First 5-minute bar, 09:30–09:35 ET. `ORH` = high of that bar.
 
 ### 8.2 Trigger
-Between 09:35 and 10:00 ET:
+
+> **Operator amendment 2026-08-11 (b) — "confirmed-hold market entry".**
+> The original rule is real-time: enter at the instant price crosses ORH.
+> It was approximated as a single retrospective check at 10:05 ET placing
+> a stop-limit at `ORH × 1.0005 / × 1.0050`. That approximation is not
+> lossy — it is **inverted**. By 10:05 the cross is 5–35 minutes old, so:
+> a breakout that ran never returns to the band and never fills, while a
+> breakout that faded back to ORH sits inside the band and does fill. The
+> system therefore filled failed breakouts and skipped working ones, by
+> construction. Against §1 (20–25% win rate, nearly all return from a few
+> large winners) that inverts the edge.
+>
+> The band is removed. Entry is now a market order, taken only if the
+> breakout is still holding at the end of the opening-range window.
+> Winners and losers fill alike; there is no price-based self-selection.
+
+Evaluated in ONE retrospective pass over the 09:30–10:00 ET 5-minute
+bars. Both conditions required:
+
 ```
-IF last trade price > ORH → enter
+BREAKOUT   some bar in 09:35-10:00 closed above ORH
+HOLDING    the FINAL bar (09:55-10:00) closed above ORH
 ```
-After 10:00 ET, cancel. No entry that day.
 
-> **Operator amendment 2026-08-11.** Sections 8.3–8.6 below replace the
-> original v1.1 text. The original ordered the steps Order → Initial stop
-> → Stop width validation → Size, which is circular and unexecutable:
-> sizing needs `risk_per_share`, which needs `fill_price`, which does not
-> exist until the order that sizing was supposed to quantify has already
-> filled. Sizing is moved ahead of the order and keyed to `limit_price`
-> (the worst-case fill, known at trigger time) and `session_low_T`, both
-> derivable from the opening-range bars before anything is sent.
-> No parameter in Section 14 is altered. See Section 13.
+If either fails → no entry that day. No re-arming, no second look.
 
-### 8.3 Pre-trade sizing (evaluated at the moment the trigger fires)
+`HOLDING` is what replaces the band. A breakout that has already
+reversed below ORH by 10:00 is not entered; one still above it is
+entered at market wherever it happens to be trading.
 
-At time T, when last trade price first exceeds ORH:
+**There is no upper bound on extension, and none is needed.** A stock
+that has run far from its session low produces a large
+`est_risk_share`, which trips §8.3's `STOP_TOO_WIDE_PRETRADE` check
+against `ADR_20 × decision_price`. Chasing is governed by the existing
+risk rule rather than by a new invented threshold.
+
+> **Amendment history for §8.3–8.6.** The original v1.1 text ordered the
+> steps Order → Initial stop → Stop width validation → Size, which is
+> circular and unexecutable: sizing needed `risk_per_share`, which needed
+> `fill_price`, which did not exist until the order sizing was supposed
+> to quantify had already filled. Amendment 2026-08-11 (a) broke that by
+> moving sizing ahead of the order and keying it to the stop-limit
+> `limit_price`. Amendment 2026-08-11 (b) — the text below — supersedes
+> that: the band is gone, so sizing keys to `decision_price` instead.
+> The ordering fix survives; only the price it keys to changed.
+> No Section 14 parameter is altered by either. See Section 13.
+
+### 8.3 Pre-trade sizing (evaluated at the 09:55–10:00 bar close)
+
+All inputs come from the single 09:30–10:00 ET bar pull of §8.2. Nothing
+here requires data newer than 10:00 ET.
+
 ```
-session_low_T   = lowest Low from 09:30 ET to T
-
-TICK ROUNDING — all computed order prices round UP to $0.01:
-  stop_price    = ceil(ORH × 1.0005, 0.01)
-  limit_price   = ceil(ORH × 1.0050, 0.01)
-  IF limit_price <= stop_price:
-      limit_price = stop_price + 0.01
-
-est_risk_share  = limit_price − session_low_T
+decision_price = CLOSE of the final bar (09:55-10:00 ET)
+session_low    = lowest Low across 09:30-10:00 ET
+est_risk_share = decision_price − session_low
 ```
-Sizing uses the ROUNDED `limit_price`. §5 floors price at $5.00, so
-sub-penny increments never apply.
 
 Validate before sending the order:
 ```
 IF est_risk_share <= 0
     → no trade, log INVALID_RISK
-IF est_risk_share > (ADR_20 × limit_price)
+IF est_risk_share > (ADR_20 × decision_price)
     → no trade, log STOP_TOO_WIDE_PRETRADE
 ```
 
@@ -289,31 +314,27 @@ Size:
 ```
 risk_capital = equity × 0.005
 shares       = floor(risk_capital / est_risk_share)
-cap          = floor((equity × 0.20) / limit_price)
+cap          = floor((equity × 0.20) / decision_price)
 shares       = min(shares, cap)
 IF shares < 1 → no trade
 ```
 
+Tick rounding no longer applies: a market order carries no price, and
+`decision_price` is an observed close, not a computed price. `PRICE_RAN_AWAY`
+(2026-08-11 a) is **retired** — it existed only to reject prices above the
+stop-limit band, and under this rule a price above ORH is the entry
+condition, not a disqualifier.
+
 ### 8.4 Order
-
-Immediately before submitting:
 ```
-IF last_trade_price > limit_price:
-    no trade, log PRICE_RAN_AWAY
-```
-A last trade price between `stop_price` and `limit_price` is acceptable —
-it fills immediately inside the band and risk was sized against
-`limit_price`. No re-arming. No second attempt later in the window.
-
-```
-Buy stop-limit, quantity = shares
-  stop  = stop_price      (rounded, §8.3)
-  limit = limit_price     (rounded, §8.3)
-Cancel if unfilled after 60 seconds. Never chase.
+Buy MARKET, quantity = shares
 Never re-send for the same symbol the same day.
 ```
+No limit, no stop trigger, no 60-second cancel. The whole point of the
+amendment is that entry does not depend on price returning to a level
+it has already left.
 
-**Partial fills.** At the 60-second cancel:
+**Partial fills.**
 ```
 IF filled_qty == 0:
     no position, log NO_FILL
@@ -323,14 +344,23 @@ IF filled_qty >= 1:
 ```
 Log `intended_qty`, `filled_qty`, `fill_ratio` on every entry attempt.
 
+**Slippage is not separately capped.** The fill occurs after
+`decision_price` was observed, so it will differ. §8.6's `RISK_OVERRUN`
+check governs the only consequence that matters — a fill far enough above
+the stop to breach the risk budget — and needs no additional threshold.
+
 ### 8.5 Stop placement (after fill)
 ```
-session_low_F = lowest Low from 09:30 ET to moment of fill
-STOP          = session_low_F
+STOP = session_low        (lowest Low across 09:30-10:00 ET, per §8.3)
 ```
 Place immediately as a resting stop, **for `filled_qty` only** — never
-for `intended_qty`. The stop never widens. If the low extends later in
-the session, the stop does not move.
+for `intended_qty`. The stop never widens.
+
+The stop is the 09:30–10:00 session low, NOT the low up to the moment of
+fill. Two reasons: it is already known from the §8.2 bar pull, so no
+second request is needed and nothing depends on data newer than 10:00;
+and a lower low printed after 10:00 could only *widen* the stop, which
+this section forbids anyway.
 
 ### 8.6 Post-fill reconciliation
 ```
@@ -340,15 +370,18 @@ actual_risk_pct   = (filled_qty × actual_risk_share) / equity
 Uses `filled_qty`, not `intended_qty` — per §8.4 the fill *is* the
 position. A partial fill therefore carries proportionally less risk than
 planned, which is acceptable; it is never topped up.
-Because `fill_price <= limit_price`, actual risk is normally at or below
-planned. It can exceed plan only if the session low extended between
-trigger and fill.
+There is no longer a limit price bounding the fill, so actual risk may
+land either side of plan depending on where the market opened the order.
+This check is therefore the sole slippage governor:
 ```
 IF actual_risk_pct > 0.0075
     → exit immediately at market, log RISK_OVERRUN
 ELSE
     → log planned vs actual risk and continue
 ```
+0.0075 is 1.5× the 0.005 target, so a fill up to ~50% further above the
+stop than planned is tolerated; beyond that the position is closed
+rather than carried at unplanned size.
 Full size in one order. Never scale in. Never add.
 Identical risk on every position regardless of setup quality.
 
@@ -508,6 +541,8 @@ to override.
 | 2026-08-11 | §8.4 `PRICE_RAN_AWAY`: skip if `last_trade_price > limit_price` at submission | A buy-stop whose trigger sits at or below market is rejected by the exchange. Under the retrospective 10:05 approximation the break may be up to 30 minutes old, so this is the common case on strong moves. Hard skip, no re-arm — a later re-attempt would be chasing, which §8.4 forbids. |
 | 2026-08-11 | §8.4/§8.5 partial fills: the fill IS the position; stop covers `filled_qty` only; never top up | Stop-limit day orders partial-fill routinely. Placing a resting sell-stop for `intended_qty` against a smaller fill would sell shares not held — a short on a long-only system (Constraint #6). `intended_qty`, `filled_qty` and `fill_ratio` are now logged per attempt (§11). |
 | 2026-08-11 | §6.1 impulse selection replaced with a deterministic single pass (H = highest High >= 10 sessions old; L = lowest Low in the 25 sessions before it) | The original gave constraints but no tie-break, and the implementation took the most recent qualifying high. H then advanced one session per session while price stayed elevated, pinning the measured consolidation near 11 sessions regardless of the real base — §6.2 inert, §6.3–6.5 analysing a truncated slice, §6.7 referenced against an ordinary base bar instead of the impulse peak. |
+| 2026-08-11 (b) | §8.2/8.3/8.4/8.5 replaced with **confirmed-hold market entry**: enter at market at 10:20 ET if a 09:35-10:00 bar closed above ORH AND the 09:55-10:00 bar also closed above ORH. Stop-limit band, tick rounding and `PRICE_RAN_AWAY` all retired. `STOP` = 09:30-10:00 session low. | The 10:05 stop-limit approximation was not lossy but INVERTED: by 10:05 the cross was 5-35 minutes old, so a breakout that ran never returned to the band and never filled, while one that faded back to ORH filled. The system selected failed breakouts by construction — fatal against §1's dependence on rare large winners. Market entry removes the price-based self-selection. It also removes the need for sub-15-minute data, so the amended rule runs accurately on free SIP; see §15. |
+| 2026-08-11 (b) | `market-open` retimed 10:05 -> 10:20 ET | Every input to the amended rule comes from the 09:30-10:00 window. At 10:20 that whole window is >=20 minutes old and served by free SIP, satisfying §15's SIP-only requirement. At 10:05 the final bars are inside the delay. |
 
 ---
 
@@ -525,7 +560,13 @@ causes of poor performance:
 - 2R earnings cushion (§9.5)
 - 63-day impulse lookback and 30% impulse threshold (§6.1)
 - 0.75% `actual_risk_pct` overrun trip (§8.6 post-fill reconciliation)
-- `PRICE_RAN_AWAY` as a hard skip rather than a delayed re-arm (§8.4)
+- ~~`PRICE_RAN_AWAY` as a hard skip rather than a delayed re-arm (§8.4)~~
+  — RETIRED 2026-08-11 (b) with the stop-limit band
+- The 09:55-10:00 bar as the `HOLDING` confirmation and the source of
+  `decision_price` (§8.2/8.3). The source specifies a real-time cross;
+  end-of-window is this operator's single-check substitute for it
+- 10:20 ET as the decision time (§8.2). Driven by the free-SIP
+  15-minute delay, not by anything in the source material
 
 Do not change them. Report how they behave.
 
@@ -573,16 +614,41 @@ relation to the session low at trigger. That is a different entry rule
 with unknown behaviour, not §8.2 with added latency.
 
 Consequently:
-1. `market-open` remains DISABLED. Do not re-enable it without a
-   real-time SIP subscription.
-2. All historical and daily work uses `feed=sip` with `end` at least 15
+1. All historical and daily work uses `feed=sip` with `end` at least 15
    minutes old — free, and accurate. There is no silent fallback to IEX:
    if SIP is unavailable for a request, the call fails loudly and logs
    `DATA_FEED_UNAVAILABLE`.
-3. Any code path computing `ORH`, a session low, or a position size must
+2. Any code path computing `ORH`, a session low, or a position size must
    assert `feed == "sip"` and raise otherwise.
-4. There is deliberately **no configuration flag** to override any of
-   this. Re-enabling live entries is a spec amendment, not a setting.
+3. There is deliberately **no configuration flag** to override any of
+   this. IEX is not reachable from this system at all.
 
 Sections 4–7 are unaffected: the screener reads completed prior
 sessions, where the 15-minute delay never binds.
+
+#### Suspension lifted for the amended §8 — 2026-08-11 (b)
+
+The suspension above was scoped to the ORIGINAL §8, whose stop-limit
+band had to be priced and worked while the opening range was less than
+15 minutes old. **That constraint does not apply to the amended
+"confirmed-hold market entry" rule.** Every input it uses — `ORH`, the
+breakout, the hold check, `session_low`, `decision_price` — comes from
+the 09:30–10:00 ET window and nothing newer. Run at **10:20 ET**, that
+entire window is at least 20 minutes old and is served by free SIP.
+
+So the amended §8 is executable, accurately, with no subscription:
+
+- data quality: SIP throughout, so the IEX bias that oversized positions
+  is gone;
+- rule fidelity: a single retrospective check is now the *native* shape
+  of the rule rather than a broken approximation of a real-time one.
+
+Running at 10:20 was previously rejected by the operator, correctly, on
+the grounds that it left the fill unrelated to `ORH × 1.0050` and the
+stop unrelated to the session low at trigger. Both objections were
+properties of the stop-limit band, which no longer exists: entry is at
+market, and the stop is the 09:30–10:00 session low by definition.
+
+`market-open` stays DISABLED until the amended rule is implemented and
+verified end-to-end. Re-enabling remains a deliberate act, not a
+setting. What is no longer true is that it requires paying for data.

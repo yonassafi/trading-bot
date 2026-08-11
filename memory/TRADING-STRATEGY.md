@@ -155,101 +155,95 @@ evaluated after the open / after sizing — checked in
 
 ## SECTION 8 — ENTRY
 
+**Amended 2026-08-11 (b): confirmed-hold market entry.** The old
+stop-limit band at `ORH x 1.0005/1.0050`, tick rounding, the 60-second
+cancel and `PRICE_RAN_AWAY` are ALL RETIRED. Reason: by 10:05 the cross
+was 5-35 minutes old, so a breakout that ran never returned to the band
+and never filled, while one that faded back to ORH did fill. The system
+selected failed breakouts by construction — fatal against Section 1's
+dependence on rare large winners. Full text in `docs/` §8 and §13.
+
 - **8.1 Opening range**: first 5-minute bar, 09:30–09:35 ET. `ORH` = high
   of that bar.
-- **8.2 Trigger**: between 09:35–10:00 ET, `IF last trade price > ORH -> enter`.
-  After 10:00 ET, cancel — no entry that day. **Approximated** as a
-  single retrospective check at 10:05 ET using 5-minute historical bars
-  (operator decision, see below).
-### 8.3 Pre-trade sizing (evaluated at the moment the trigger fires)
 
-At time T, when last trade price first exceeds ORH:
+### 8.2 Trigger — ONE retrospective pass over 09:30-10:00 ET 5-min bars
 
-    session_low_T   = lowest Low from 09:30 ET to T
+    BREAKOUT   some bar in 09:35-10:00 closed above ORH
+    HOLDING    the FINAL bar (09:55-10:00) closed above ORH
 
-    TICK ROUNDING — all computed order prices round UP to $0.01:
-      stop_price    = ceil(ORH × 1.0005, 0.01)
-      limit_price   = ceil(ORH × 1.0050, 0.01)
-      IF limit_price <= stop_price:
-          limit_price = stop_price + 0.01
+Both required. If either fails -> no entry that day. No re-arming.
 
-    est_risk_share  = limit_price − session_low_T
+HOLDING replaces the price band. A breakout already reversed below ORH
+by 10:00 is not entered; one still above it is entered at market
+wherever it trades. No upper bound on extension is needed — a stock far
+from its session low produces a large `est_risk_share`, which trips
+8.3's STOP_TOO_WIDE_PRETRADE against `ADR_20 x decision_price`.
 
-Sizing uses the ROUNDED limit_price. Section 5 floors price at $5.00, so
-sub-penny increments never apply.
+Fires at **10:20 ET**, not 10:05. Every input comes from the 09:30-10:00
+window, so at 10:20 all of it is >=20 minutes old and served by free SIP
+(Section 15). At 10:05 the final bars are inside the 15-minute delay.
 
-Validate before sending the order:
+### 8.3 Pre-trade sizing — all from the single 8.2 bar pull
 
-    IF est_risk_share <= 0
-        → no trade, log INVALID_RISK
-    IF est_risk_share > (ADR_20 × limit_price)
-        → no trade, log STOP_TOO_WIDE_PRETRADE
+    decision_price = CLOSE of the final bar (09:55-10:00 ET)
+    session_low    = lowest Low across 09:30-10:00 ET
+    est_risk_share = decision_price - session_low
 
-Size:
+    IF est_risk_share <= 0 -> no trade, log INVALID_RISK
+    IF est_risk_share > (ADR_20 x decision_price)
+        -> no trade, log STOP_TOO_WIDE_PRETRADE
 
-    risk_capital = equity × 0.005
+    risk_capital = equity x 0.005
     shares       = floor(risk_capital / est_risk_share)
-    cap          = floor((equity × 0.20) / limit_price)
+    cap          = floor((equity x 0.20) / decision_price)
     shares       = min(shares, cap)
-    IF shares < 1 → no trade
+    IF shares < 1 -> no trade
+
+Nothing here needs data newer than 10:00 ET.
 
 ### 8.4 Order
 
-Immediately before submitting:
-
-    IF last_trade_price > limit_price:
-        no trade, log PRICE_RAN_AWAY
-
-Price between stop_price and limit_price is acceptable — it fills
-immediately inside the band and risk was sized against limit_price.
-No re-arming. No second attempt later in the window.
-
-    Buy stop-limit, quantity = shares
-      stop  = stop_price      (rounded, 8.3)
-      limit = limit_price     (rounded, 8.3)
-    Cancel if unfilled after 60 seconds. Never chase.
+    Buy MARKET, quantity = shares
     Never re-send for the same symbol the same day.
 
-**Partial fills.** At the 60-second cancel:
+No limit, no stop trigger, no 60-second cancel.
 
-    IF filled_qty == 0:
-        no position, log NO_FILL
-    IF filled_qty >= 1:
-        this is the position
-        never top up, never re-send, symbol is done for the day
+Partial fills:
 
-Log intended_qty, filled_qty, fill_ratio on every entry attempt.
+    IF filled_qty == 0 -> no position, log NO_FILL
+    IF filled_qty >= 1 -> that IS the position; never top up,
+                          never re-send, symbol done for the day
+
+Log intended_qty, filled_qty, fill_ratio on every entry ATTEMPT.
+Slippage is not separately capped — 8.6's RISK_OVERRUN governs the only
+consequence that matters.
 
 ### 8.5 Stop placement (after fill)
 
-    session_low_F = lowest Low from 09:30 ET to moment of fill
-    STOP          = session_low_F
+    STOP = session_low   (lowest Low across 09:30-10:00 ET, per 8.3)
 
-Place immediately as a resting stop, **for filled_qty only** — never for
-intended_qty. A stop covering shares you don't hold is a short on a
-long-only system. The stop never widens. If the low extends later in the
-session, the stop does not move.
+Placed immediately as a real **stop-market** order for `filled_qty`
+ONLY — never intended_qty. A stop covering shares you do not hold goes
+short when it triggers (Constraint #6). The stop never widens.
 
-Placed as a real **stop-market** order (operator decision — see below).
+It is the 09:30-10:00 low, NOT the low up to the fill: it is already
+known from the 8.2 pull, and a later low could only widen the stop,
+which this section forbids anyway.
 
 ### 8.6 Post-fill reconciliation
 
-    actual_risk_share = fill_price − STOP
-    actual_risk_pct   = (filled_qty × actual_risk_share) / equity
-
-Uses filled_qty, not intended_qty — per 8.4 the fill IS the position.
-
-Because fill_price <= limit_price, actual risk is normally at or below
-planned. It can exceed plan only if the session low extended between
-trigger and fill.
+    actual_risk_share = fill_price - STOP
+    actual_risk_pct   = (filled_qty x actual_risk_share) / equity
 
     IF actual_risk_pct > 0.0075
-        → exit immediately at market, log RISK_OVERRUN
+        -> exit immediately at market, log RISK_OVERRUN
     ELSE
-        → log planned vs actual risk and continue
+        -> log planned vs actual risk and continue
 
-Full size in one order. Never scale in. Never add. Identical risk on
-every position regardless of setup quality.
+With no limit price bounding the fill, this is the sole slippage
+governor. 0.0075 is 1.5x the 0.005 target.
+
+Full size in one order. Never scale in. Never add.
 
 ## SECTION 9 — POSITION MANAGEMENT (END OF DAY ONLY, in order)
 
@@ -332,8 +326,11 @@ override. Mechanism: `memory/HALT.md` — see Operator Substitutions.
 1.10 extension limit · 5-minute opening range · 0.5% risk/trade · day-4
 partial timing · half-risk stop after partial · all of Section 10 ·
 63-day impulse lookback/30% threshold · 2R earnings cushion ·
-**0.75% actual_risk_pct overrun trip (8.6)** · **PRICE_RAN_AWAY as a hard
-skip rather than a delayed re-arm (8.4)**.
+**0.75% actual_risk_pct overrun trip (8.6)** · the 09:55-10:00 bar as
+the HOLDING confirmation and source of decision_price (8.2/8.3) ·
+**10:20 ET decision time (8.2)** — driven by the free-SIP 15-minute
+delay, not by anything in the source.
+(RETIRED 2026-08-11 (b): PRICE_RAN_AWAY, with the stop-limit band.)
 
 ---
 
