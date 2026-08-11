@@ -146,9 +146,24 @@ STOP_TOO_WIDE/UNSPECIFIED_SITUATION was logged this run.
   bash scripts/telegram.sh "<symbols, shares, fill prices, one-line why>"
 
 STEP 8 — COMMIT AND PUSH (mandatory if anything changed):
+  # CRITICAL for this routine: orders you placed exist at Alpaca whether
+  # or not this push lands. If it fails, memory/POSITIONS.json is lost
+  # with the container and the next run sees an empty positions file
+  # beside live broker positions carrying stops it knows nothing about.
+  # The container's clone can land on a DETACHED HEAD, where a commit
+  # sits on no branch and the push is rejected with "a pushed branch tip
+  # is behind its remote counterpart". `git pull --rebase` does NOT fix
+  # this — it reports "up to date" and the next push fails identically.
+  # Re-attach FIRST (harmless no-op if already on main):
+  git checkout -B main HEAD
   git add memory/TRADE-LOG.md memory/POSITIONS.json memory/EXCEPTIONS-LOG.md memory/CANDIDATES.md
   git commit -m "market-open entries $DATE"
   git push origin main
-Skip commit if truly nothing changed (regime FAIL and zero candidates).
-On push failure: git pull --rebase origin main, then push again. Never
-force-push.
+  # Verify it actually landed — these MUST match:
+  git fetch origin && git rev-parse HEAD origin/main
+If the two hashes differ the push did NOT land. Do NOT end the run
+quietly: send a Telegram alert naming every symbol you entered, its
+share count, fill price and stop, so the positions are recoverable by
+hand. Skip commit only if truly nothing changed (regime FAIL and zero
+candidates). On push failure: git pull --rebase origin main, then push
+again. Never force-push.

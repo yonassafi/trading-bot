@@ -72,10 +72,19 @@ STEP 6 — Send ONE Telegram message, <= 15 lines:
   <halt-state note if applicable>"
 
 STEP 7 — COMMIT AND PUSH (mandatory):
+  # The container's clone can land on a DETACHED HEAD, where a commit
+  # sits on no branch and the push is rejected with "a pushed branch tip
+  # is behind its remote counterpart". `git pull --rebase` does NOT fix
+  # it — it reports "up to date" and the next push fails identically.
+  # Re-attach FIRST (harmless no-op if already on main):
+  git checkout -B main HEAD
   git add memory/WEEKLY-REVIEW.md
   git commit -m "weekly review $DATE"
   git push origin main
-On push failure: git pull --rebase origin main, then push again. Never
-force-push. Note: unlike the old strategy's weekly-review, this NEVER
-also commits memory/TRADING-STRATEGY.md — that file is never touched by
-an automated routine.
+  # Verify it actually landed — these MUST match:
+  git fetch origin && git rev-parse HEAD origin/main
+If the two hashes differ the push did NOT land — say so in your final
+report. On push failure: git pull --rebase origin main, then push again.
+Never force-push. Note: unlike the old strategy's weekly-review, this
+NEVER also commits memory/TRADING-STRATEGY.md — that file is never
+touched by an automated routine.

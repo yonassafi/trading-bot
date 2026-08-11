@@ -102,8 +102,21 @@ Send ONE Telegram message, always, even on no-action days, <= 15 lines:
   <one-line note if anything exceptional was logged>"
 
 STEP 8 — COMMIT AND PUSH (mandatory, no exceptions):
+  # CRITICAL: memory/RISK-STATE.json carries peak equity, which the
+  # 25%-drawdown halt check depends on. Losing this push means tomorrow's
+  # Section 12 check runs against a stale peak.
+  # The container's clone can land on a DETACHED HEAD, where a commit
+  # sits on no branch and the push is rejected with "a pushed branch tip
+  # is behind its remote counterpart". `git pull --rebase` does NOT fix
+  # this — it reports "up to date" and the next push fails identically.
+  # Re-attach FIRST (harmless no-op if already on main):
+  git checkout -B main HEAD
   git add memory/TRADE-LOG.md memory/POSITIONS.json memory/RISK-STATE.json memory/EXCEPTIONS-LOG.md
   git commit -m "EOD reconciliation + summary $DATE"
   git push origin main
-On push failure: git pull --rebase origin main, then push again. Never
-force-push.
+  # Verify it actually landed — these MUST match:
+  git fetch origin && git rev-parse HEAD origin/main
+If the two hashes differ the push did NOT land: send a Telegram alert
+saying so explicitly and include the equity figure and any position
+state changes, so they can be reconstructed by hand. On push failure:
+git pull --rebase origin main, then push again. Never force-push.

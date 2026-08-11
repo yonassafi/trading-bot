@@ -41,7 +41,14 @@ STEP 4 — No other action. No file writes besides
 memory/EXCEPTIONS-LOG.md if STEP 3 found something.
 
 STEP 5 — COMMIT AND PUSH only if memory/EXCEPTIONS-LOG.md changed:
+  # The container's clone can land on a DETACHED HEAD, where a commit
+  # sits on no branch and the push is rejected. `git pull --rebase` does
+  # NOT fix it. Re-attach FIRST (no-op if already on main):
+  git checkout -B main HEAD
   git add memory/EXCEPTIONS-LOG.md
   git commit -m "midday heartbeat: missing-stop alert $DATE"
   git push origin main
-Otherwise skip the commit entirely — this routine usually changes nothing.
+  # Verify it landed — these MUST match:
+  git fetch origin && git rev-parse HEAD origin/main
+Otherwise skip the commit entirely — this routine usually changes
+nothing. Never force-push.

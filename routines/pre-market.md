@@ -57,8 +57,18 @@ UNSPECIFIED_SITUATION was logged this run.
   bash scripts/telegram.sh "<one line>"
 
 STEP 6 — COMMIT AND PUSH (mandatory):
+  # The container's clone can land on a DETACHED HEAD. A commit made
+  # there sits on no branch and the push is rejected with "a pushed
+  # branch tip is behind its remote counterpart". `git pull --rebase`
+  # does NOT fix this — it reports "up to date" and the next push fails
+  # identically. Re-attach FIRST (harmless no-op if already on main):
+  git checkout -B main HEAD
   git add memory/CANDIDATES.md memory/EXCEPTIONS-LOG.md
   git commit -m "pre-market screener $DATE"
   git push origin main
-On push failure: git pull --rebase origin main, then push again. Never
-force-push.
+  # Verify it actually landed — these MUST match:
+  git fetch origin && git rev-parse HEAD origin/main
+If the two hashes differ the push did NOT land and this run's work is
+lost when the container is reclaimed — say so loudly in your final
+report. On push failure: git pull --rebase origin main, then push again.
+Never force-push.
