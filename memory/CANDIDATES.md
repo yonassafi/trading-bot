@@ -14,43 +14,27 @@ reproduced here since neither used a real day's full scan.)
 ## 2026-08-11 — Pre-market Screener
 
 **Regime (ONEQ):** PASS
-10 SMA: 101.8475 (yesterday 101.2055) | 20 SMA: 101.3142 (yesterday 101.1737)
+10 SMA: 101.7634 (yesterday 101.1034) | 20 SMA: 101.2567 (yesterday 101.1122)
 
-**Universe:** 5900 tradable common-stock candidates
-**Stage A survivors (price/liquidity/ADR):** 200
-**Stage B candidates (post setup-scan/exclusions):** 0
+**Universe:** 5914 tradable common-stock candidates
+**Stage A survivors (price/liquidity/ADR):** 1109
+**Stage B candidates (post setup-scan/exclusions):** 1
 
-⚠️ Dollar-volume figures use Alpaca's default (IEX) feed, which understates true consolidated market volume. The $10M / 30x-equity threshold is applied literally per Section 0.4 — not adjusted to compensate. Known limitation, not a bug.
-
-No candidates qualified today.
-
-**Rejection counts (first disqualifying rule):**
-- dollar_volume: 3460
-- price_below_5: 1551
-- adr_below_4pct: 500
-- momentum_percentile: 198
-- insufficient_history: 189
-- monotonic_contraction_failed: 1
-
-
-## 2026-08-11 — Pre-market Screener
-
-**Regime (ONEQ):** PASS
-10 SMA: 101.8475 (yesterday 101.2055) | 20 SMA: 101.3142 (yesterday 101.1737)
-
-**Universe:** 5900 tradable common-stock candidates
-**Stage A survivors (price/liquidity/ADR):** 200
-**Stage B candidates (post setup-scan/exclusions):** 0
-
-⚠️ Dollar-volume figures use Alpaca's default (IEX) feed, which understates true consolidated market volume. The $10M / 30x-equity threshold is applied literally per Section 0.4 — not adjusted to compensate. Known limitation, not a bug.
-
-No candidates qualified today.
+| Rank | Symbol | 63d Return | ADR_20 | Last Close | Ref SMA | Consol. High | $Vol 50d Avg |
+|---|---|---|---|---|---|---|---|
+| 1 | FBRX | 219.82% | 5.7% | $76.82 | 10 | $76.6 | $74,551,599 |
 
 **Rejection counts (first disqualifying rule):**
-- dollar_volume: 3460
-- price_below_5: 1551
-- adr_below_4pct: 500
-- momentum_percentile: 198
-- insufficient_history: 190
+- dollar_volume: 1729
+- price_below_5: 1567
+- adr_below_4pct: 1339
+- momentum_percentile: 1064
+- insufficient_history: 199
+- close_below_reference_sma_recently: 4
+- higher_lows_failed: 3
+- close_below_50sma_in_consolidation: 3
+- no_reference_sma: 2
+- convergence_failed: 1
+- extended_beyond_base: 1
 - monotonic_contraction_failed: 1
 

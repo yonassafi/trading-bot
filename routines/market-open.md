@@ -50,6 +50,29 @@ looking at any candidate:
 If remaining_slots <= 0: no new entries possible today regardless of
 candidates. Skip to STEP 8.
 
+STEP 3b — WINDOW GUARD (mandatory, before touching any candidate).
+This routine's entire premise is that the 09:30-10:00 ET opening range
+is CLOSED and COMPLETE. If it fires early — DST drift, scheduler jitter,
+a manual test run — ORH would be computed from a partial 09:30-09:35 bar
+and every downstream number (session_low_T, est_risk_share, shares, STOP)
+inherits that error silently. Prove the precondition; do not assume it:
+
+  a. Current time must be >= 10:00 ET. Compute it, don't guess:
+     date -u +%Y-%m-%dT%H:%M:%SZ
+     and convert (ET = UTC-4 during EDT, UTC-5 during EST).
+  b. Pull the opening-range bars for the regime proxy ONEQ:
+     bash scripts/alpaca.sh bars "symbols=ONEQ&timeframe=5Min&start=<today 09:30 ET as UTC>&end=<today 10:00 ET as UTC>&limit=20&feed=iex"
+     The response must contain a bar timestamped 09:55 ET. That is the
+     last bar of the window; its presence proves the window closed and
+     the data has settled.
+
+If EITHER check fails: place NO orders, evaluate NO candidates. Log
+UNSPECIFIED_SITUATION to memory/EXCEPTIONS-LOG.md recording the current
+UTC time, the derived ET time, and what the bar query returned. Send one
+Telegram alert. Skip to STEP 8. An empty or short window is NOT a
+"no_trigger" result and must never be recorded as one — it means this
+routine ran when it should not have.
+
 STEP 4 — For each ranked candidate in today's CANDIDATES.md, in rank
 order, until you've placed remaining_slots entries or run out of
 candidates:

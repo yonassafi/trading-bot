@@ -26,10 +26,12 @@ Pipeline:
 Writes memory/CANDIDATES.md. Every rejection is logged with the first
 rule that disqualified it (Section 11).
 
-Known limitation: Alpaca free/IEX-feed dollar-volume figures understate
-true consolidated volume. Per Section 0.4 the $10M/30x-equity threshold
-is used exactly as stated, not adjusted to compensate - a loud warning is
-logged instead.
+Data feed: SIP (consolidated tape), available free for historical bars.
+This screener only reads completed prior sessions, so the free plan's
+~15-minute delay never binds. Previously IEX, which understated dollar
+volume by a measured median of 28.7x and shrank the universe to ~200
+mega-caps. Section 5's thresholds are unchanged - only the measurement
+was wrong.
 """
 
 import json
@@ -140,8 +142,14 @@ def fetch_bars_batch(symbols, days, feed=None):
     time."""
     if not symbols:
         return {}
-    end = datetime.now(timezone.utc).date()
-    start = end - timedelta(days=days)
+    # Alpaca's free plan serves SIP history only OUTSIDE a ~15-minute
+    # delay. Asking for end=<today's date> reaches into that window and
+    # the whole request 403s — verified 2026-08-11: end=2026-08-11 failed,
+    # end=<now-16min> and end=<yesterday> both succeeded. Cut the window
+    # 20 minutes short of now so the delay never clips it.
+    now = datetime.now(timezone.utc)
+    end = (now - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    start = (now - timedelta(days=days)).date()
     out = {}
     page_token = None
     while True:
@@ -400,12 +408,18 @@ def write_candidates_md(date_str, regime, universe_count, stage_a_count,
         lines.append("")
 
     if candidates:
-        lines.append("| Rank | Symbol | 63d Return | ADR_20 | Last Close | Ref SMA | Consol. High |")
-        lines.append("|---|---|---|---|---|---|---|")
+        # $50d Vol is REQUIRED by routines/market-open.md step 4i (the
+        # Section 7 liquidity exclusion reads dollar_volume_50d_avg "from
+        # the candidate's CANDIDATES.md row"). It was previously emitted
+        # only to stdout JSON, so the exclusion had no value to test
+        # against. Do not drop this column.
+        lines.append("| Rank | Symbol | 63d Return | ADR_20 | Last Close | Ref SMA | Consol. High | $Vol 50d Avg |")
+        lines.append("|---|---|---|---|---|---|---|---|")
         for i, c in enumerate(candidates, 1):
             lines.append(
                 f"| {i} | {c['symbol']} | {c['return_63d_pct']}% | {c['adr_20_pct']}% | "
-                f"${c['last_close']} | {c['reference_sma_period']} | ${c['consolidation_high_ref']} |"
+                f"${c['last_close']} | {c['reference_sma_period']} | ${c['consolidation_high_ref']} | "
+                f"${c['dollar_volume_50d_avg']:,.0f} |"
             )
     else:
         lines.append("No candidates qualified today.")
@@ -417,8 +431,28 @@ def write_candidates_md(date_str, regime, universe_count, stage_a_count,
     lines.append("")
 
     CANDIDATES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(CANDIDATES_FILE, "a") as f:
-        f.write("\n".join(lines) + "\n")
+    section = "\n".join(lines) + "\n"
+
+    # REPLACE any existing section for this date rather than appending.
+    # routines/market-open.md reads "today's dated section" and no rule
+    # says which wins if there are several — a re-run (or a manual test)
+    # used to leave two or three same-date sections with different
+    # candidate lists sitting in front of order-placing code. Idempotent
+    # by date instead.
+    header = f"## {date_str} — Pre-market Screener"
+    existing = CANDIDATES_FILE.read_text() if CANDIDATES_FILE.exists() else ""
+    if header in existing:
+        out, skipping = [], False
+        for line in existing.splitlines(keepends=True):
+            if line.startswith(header):
+                skipping = True
+                continue
+            if skipping and line.startswith("## ") and not line.startswith(header):
+                skipping = False
+            if not skipping:
+                out.append(line)
+        existing = "".join(out).rstrip("\n") + "\n"
+    CANDIDATES_FILE.write_text(existing + section)
 
 
 def main():
@@ -428,21 +462,30 @@ def main():
     equity = account_equity()
     print(f"Account equity: {equity}", file=sys.stderr)
 
-    # Free/IEX data-feed acknowledgment (operator decision — see
-    # memory/TRADING-STRATEGY.md). Threshold is NOT adjusted to
-    # compensate (Section 0.4 forbids parameter tuning).
-    feed_warning = (
-        "Dollar-volume figures use Alpaca's default (IEX) feed, which "
-        "understates true consolidated market volume. The $10M / 30x-"
-        "equity threshold is applied literally per Section 0.4 — not "
-        "adjusted to compensate. Known limitation, not a bug."
-    )
-    # Alpaca's /v2/stocks/bars defaults to SIP for recent data and 403s if
-    # the account isn't entitled to it. Confirmed free/IEX-tier account
-    # (user-provided) -> request feed=iex explicitly everywhere. See the
-    # feed_warning above for why this isn't silently "fixed" by pretending
-    # it's SIP.
-    feed = "iex"
+    # SIP (consolidated tape). Verified working on this free-tier account
+    # 2026-08-11 for daily bars: Alpaca's free plan serves historical SIP
+    # data outside a ~15-minute delay window, and this screener only ever
+    # reads bars from completed prior sessions, so the delay never binds.
+    #
+    # This replaces feed="iex". IEX sees only its own executions — a
+    # single-digit share of consolidated volume — so IEX dollar volume
+    # understated the real figure by a MEDIAN OF 28.7x across a
+    # market-cap-spanning sample (measured, not estimated):
+    #
+    #   AAPL 32.0x   AMD 51.2x   BBAI 55.1x   F 34.0x   HIMS 26.3x
+    #   IONQ 28.7x   OSCR 24.7x  PLUG 27.1x   RIOT 14.5x  SOFI 21.4x
+    #
+    # That made Section 5's $10M floor behave like a ~$290M floor and cut
+    # the universe to ~200 mega-caps — structurally the wrong pool for a
+    # strategy hunting 30% impulses into tight bases. BBAI, OSCR and PLUG
+    # all clear $10M consolidated and all failed on IEX.
+    #
+    # NOTE THIS IS NOT A PARAMETER CHANGE. Section 5's thresholds are
+    # untouched; Section 0.4 is not engaged. This corrects the
+    # MEASUREMENT so the stated threshold means what it says. Do not
+    # "compensate" by scaling volume or moving the threshold.
+    feed = "sip"
+    feed_warning = None
 
     regime = check_regime(feed=feed)
     print(f"Regime: {'PASS' if regime['pass'] else 'FAIL'}", file=sys.stderr)
