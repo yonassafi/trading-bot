@@ -74,10 +74,19 @@ candidates:
 
   4d. Order (Section 8.3): place a real stop-limit buy —
       stop = ORH * 1.0005, limit = ORH * 1.0050 — via:
-      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N_PLACEHOLDER","side":"buy","type":"stop_limit","stop_price":"X.XX","limit_price":"X.XX","time_in_force":"day"}'
-      (qty is computed in 4f below — compute sizing BEFORE placing this
-      order, using the ORH-based stop estimate; do not place with a
-      placeholder quantity.)
+      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N","side":"buy","type":"stop_limit","stop_price":"X.XX","limit_price":"X.XX","time_in_force":"day"}'
+      KNOWN SPEC GAP — READ BEFORE PROCEEDING: Section 8.3 does not say
+      what quantity to place here. Sizing (8.6 / step 4g) needs
+      risk_per_share, which needs fill_price, which does not exist until
+      this order fills. The strategy is circular at this point and
+      memory/TRADING-STRATEGY.md does not resolve it. Per Binding
+      Constraint #2 you may NOT invent a sizing basis to fill the gap.
+      Log UNSPECIFIED_SITUATION to memory/EXCEPTIONS-LOG.md naming this
+      exact gap (Section 8.3 quantity undefined), skip this candidate,
+      and continue the loop. Do not place the order. This is expected
+      behaviour until the operator amends Section 8.3.
+      If and only if Section 8.3 has been amended to specify the
+      quantity basis, follow it exactly as written and continue with 4e.
       Poll `bash scripts/alpaca.sh orders` for up to 60 seconds. If still
       unfilled after 60 seconds: cancel it (`bash scripts/alpaca.sh
       cancel ORDER_ID`), log "unfilled_60s", move to the next candidate.
