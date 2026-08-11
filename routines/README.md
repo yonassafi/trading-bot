@@ -62,11 +62,20 @@ misconfiguration" exception if you trigger one late in the evening ET.
    - `data.alpaca.markets`
    - `api.telegram.org`
 
-   Verified 2026-08-11: the sandbox proxy refuses CONNECT to all three
-   with a 403 org egress policy by default. Until they are allowlisted no
-   routine can trade, manage a position, **or raise an alert** — the
-   Telegram block means a failure on a live position leaves no trace
-   outside this repo. `github.com` is already permitted (push works).
+   Verified 2026-08-11 across two runs: the proxy refuses CONNECT to all
+   three with a 403. Until they are allowlisted no routine can trade,
+   manage a position, **or raise an alert** — the Telegram block means a
+   failure on a live position leaves no trace outside this repo.
+   `github.com` is already permitted (push works).
+
+   **This cannot be fixed from the repository.** `.claude/settings.json`
+   sets `sandbox.network.allowedDomains` for these three hosts, and it
+   made no difference — the denial is the *routine environment's* egress
+   policy, which deliberately ignores repo-level settings so a repo
+   cannot widen its own network access. The allowlist file is kept only
+   as a declaration of which hosts the bot needs. The fix must be applied
+   to the environment itself (claude.ai/code -> environment -> network /
+   custom domains), and may require an org administrator.
 
    (An older revision of this file listed "Allow unrestricted branch
    pushes" as prerequisite #2. That setting no longer exists in the
