@@ -77,10 +77,15 @@ misconfiguration" exception if you trigger one late in the evening ET.
    to the environment itself (claude.ai/code -> environment -> network /
    custom domains), and may require an org administrator.
 
-   (An older revision of this file listed "Allow unrestricted branch
-   pushes" as prerequisite #2. That setting no longer exists in the
-   console and push works without it. Removed.)
-3. **Set environment variables on the routine itself** (not `.env` — no
+   The control lives in the **same environment panel as the API keys** —
+   set network access there (full access, or an allowlist containing the
+   three hosts above).
+3. **"Allow unrestricted branch pushes"** lives under each routine's
+   **permissions** tab. Verified 2026-08-11: pushes to `main` from
+   `qms01-pre-market` succeeded with this left at its default, so it is
+   not required — but if you ever see a push rejected or land on a
+   `claude/*` branch instead of `main`, this is the switch.
+4. **Set environment variables on the routine itself** (not `.env` — no
    `.env` exists in cloud mode):
    - `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` (required)
    - `ALPACA_ENDPOINT` (optional; defaults to Alpaca's **paper** trading
