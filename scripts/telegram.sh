@@ -7,7 +7,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$ROOT/.env"
-FALLBACK="$ROOT/DAILY-SUMMARY.md"
+# memory/EXCEPTIONS-LOG.md, NOT DAILY-SUMMARY.md. The old fallback target
+# is listed in .gitignore, so in a cloud routine an undelivered alert was
+# written to a file that is never committed and dies with the container —
+# the fallback silently guaranteed the message was lost, which is worse
+# than no fallback at all. EXCEPTIONS-LOG.md is committed by every
+# routine's push step, so an undelivered alert survives.
+FALLBACK="$ROOT/memory/EXCEPTIONS-LOG.md"
 
 if [[ -f "$ENV_FILE" ]]; then
   set -a

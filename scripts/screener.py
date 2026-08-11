@@ -75,9 +75,18 @@ REGIME_PROXY = "ONEQ"
 # is NOT exhaustive; foreign ADRs whose name doesn't say "ADR"/"American
 # Depositary" (e.g. TSM: "Taiwan Semiconductor Manufacturing Company
 # Ltd.") are not caught at all. See memory/TRADING-STRATEGY.md known gaps.
+#
+# "Trust" carries a negative lookahead for Corporation/Corp/Bancorp/Bank:
+# without it, "Northern Trust Corporation Common Stock" (NTRS) — an
+# operating bank — was ejected from the universe as if it were a fund.
+# Verified 2026-08-11 against the live asset list: NTRS was the only
+# clear false positive; the other 116 "Trust" matches are genuinely
+# closed-end funds, preferreds or notes and remain excluded. Note
+# "BlackRock Income Trust Inc." must STAY excluded, so Inc. is
+# deliberately NOT in the lookahead.
 NON_COMMON_STOCK_RE = re.compile(
     r"\b(ADR|American Depositary|Warrant|Rights?|Units?|Preferred|Notes?"
-    r"|ETF|Trust|Index Fund"
+    r"|ETF|Trust(?!\s+(?:Corporation|Corp\b|Bancorp|Bank))|Index Fund"
     r"|ProShares|Direxion|iShares|Invesco QQQ|SPDR|VanEck|WisdomTree"
     r"|Global X|First Trust|Simplify|YieldMax|Roundhill|Amplify)\b",
     re.IGNORECASE,

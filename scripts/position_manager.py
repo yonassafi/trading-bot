@@ -55,16 +55,36 @@ def load_positions():
     return json.loads(POSITIONS_FILE.read_text())
 
 
-def save_positions(state):
-    POSITIONS_FILE.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+def et_today():
+    """Today's date in America/New_York — the session date the exchange
+    is on. Never derive this from UTC by subtracting a fixed offset; the
+    offset is 4 or 5 hours depending on DST and getting it wrong shifts
+    the session by a day."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/New_York")).date()
+    except Exception:
+        # No tzdata (minimal container). Fall back to UTC date, which is
+        # correct for any run between 00:00 and 20:00 ET, and flag it.
+        print("WARNING: zoneinfo unavailable, using UTC date for session "
+              "comparison", file=sys.stderr)
+        return datetime.now(timezone.utc).date()
 
 
 def fetch_daily_bars(symbol, days=15):
-    end = datetime.now(timezone.utc).date()
-    start = end - timedelta(days=days)
-    # feed=iex: confirmed free/IEX-tier Alpaca account — SIP (the
-    # unqualified default) 403s. See scripts/screener.py for the same note.
-    qs = f"symbols={symbol}&timeframe=1Day&start={start}&end={end}&limit=100&feed=iex"
+    # SIP (consolidated), matching scripts/screener.py. Previously feed=iex
+    # while the screener used SIP — two engines disagreeing about what
+    # "the close" was is precisely the failure scripts/lib/indicators.py
+    # exists to prevent. Section 9.4 exits on a CLOSE below the reference
+    # SMA; that close must be the real consolidated close.
+    #
+    # end is cut 20 minutes short of now: Alpaca's free plan serves SIP
+    # only outside a ~15-minute delay, and asking for a window that
+    # reaches into it 403s the ENTIRE request (not just recent bars).
+    now = datetime.now(timezone.utc)
+    end = (now - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    start = (now - timedelta(days=days)).date()
+    qs = f"symbols={symbol}&timeframe=1Day&start={start}&end={end}&limit=100&feed=sip"
     resp = run_alpaca("bars", qs)
     bars = resp.get("bars", {}).get(symbol, []) or []
     bars.sort(key=lambda b: b["t"])
@@ -82,10 +102,46 @@ def manage_position(symbol, pos, bars):
         return actions, pos, log
 
     today = bars[-1]
+    session_date = today["t"][:10]
+    today_et = et_today().isoformat()
+
+    # GUARD 1 — the last bar must be TODAY's completed session.
+    # Section 9 is "evaluated daily after the close" and 9.4's trigger is
+    # explicitly a CLOSE, "never an intraday touch". Two ways this breaks:
+    #   - NYSE holiday: cron only knows weekdays, so a holiday run sees
+    #     the PREVIOUS session's bar and would age the position and
+    #     re-evaluate 9.4 against a close already acted on.
+    #   - Running before the close (e.g. if the DST cron shift is missed
+    #     and 16:10 ET becomes 15:10 ET): bars[-1] is today's PARTIAL bar,
+    #     and 9.4 could exit on an intraday dip that recovers by the bell.
+    # Either way: take no action on this position and say so.
+    if session_date != today_et:
+        log["exception"] = (
+            f"UNSPECIFIED_SITUATION: latest bar is {session_date}, not today "
+            f"({today_et} ET). Market closed today (holiday), or this ran "
+            "before the close. No Section 9 evaluation performed — "
+            "sessions_held NOT incremented, no orders proposed."
+        )
+        return actions, pos, log
+
     close = today["c"]
     log["close"] = close
 
+    # GUARD 2 — increment sessions_held at most once per session.
+    # It used to increment unconditionally on every invocation, so a
+    # manual test run plus the scheduled run aged every position two
+    # sessions in one day and fired the 9.2 partial a day early.
+    if pos.get("last_managed_date") == today_et:
+        log["exception"] = (
+            f"UNSPECIFIED_SITUATION: already managed on {today_et} "
+            f"(sessions_held={pos.get('sessions_held')}). Section 9 is a "
+            "once-daily evaluation and re-running it would double-count "
+            "the holding period. No action proposed."
+        )
+        return actions, pos, log
+
     pos["sessions_held"] = pos.get("sessions_held", 0) + 1
+    pos["last_managed_date"] = today_et
     log["sessions_held"] = pos["sessions_held"]
 
     # 9.2 — first partial: exactly session 4, and at a profit.
@@ -144,8 +200,30 @@ def main():
         all_actions.extend(actions)
         logs.append(log)
 
-    save_positions(state)
-    print(json.dumps({"actions": all_actions, "logs": logs}, indent=2))
+    # This script DOES NOT WRITE memory/POSITIONS.json.
+    #
+    # It used to call save_positions(state) here — before the caller had
+    # executed a single order. Any failure after that point (order
+    # rejected, container killed, push failed) left the file asserting
+    # partial_taken=true and current_stop=<new> while the broker still
+    # held the old stop and the full position size. The next day's run
+    # trusts the file, and routines/midday.md cannot catch it because it
+    # only checks that *a* stop exists, not its quantity or price.
+    #
+    # The proposed state is returned instead. routines/daily-summary.md
+    # executes the actions FIRST, then writes the state that actually
+    # matches what the broker did. Persist reality, not intent.
+    print(json.dumps({
+        "actions": all_actions,
+        "logs": logs,
+        "proposed_positions_state": state,
+        "_contract": (
+            "proposed_positions_state reflects ALL actions succeeding. "
+            "Execute actions first, then write memory/POSITIONS.json to "
+            "match actual fills. If any action failed or partially filled, "
+            "correct the state before writing and log the discrepancy."
+        ),
+    }, indent=2))
 
 
 if __name__ == "__main__":

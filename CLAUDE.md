@@ -19,9 +19,14 @@ account. This strategy has never been backtested — no demonstrated edge.
 5. If `memory/HALT.md` exists: alert and exit. Touch nothing. Only a
    human clears it (`/resume`) — never a routine.
 
-`memory/TRADING-STRATEGY.md` is the sole source of truth for every rule
-number and threshold. Do not restate or paraphrase them elsewhere — read
-it fresh every session, since it's the one place they're allowed to live.
+`docs/QMS-01_Operational_Spec_v1.1_paper.md` is the **authoritative**
+rulebook, including the dated operator amendments in its Section 13.
+`memory/TRADING-STRATEGY.md` is the operational quick-reference mirror
+you read every session. If the two disagree, `docs/` wins and the
+disagreement is itself an `UNSPECIFIED_SITUATION` — log it, never
+resolve it silently. Any amendment goes into `docs/` first, then gets
+mirrored. Do not restate or paraphrase rule numbers or thresholds
+anywhere else — read them fresh every session.
 
 ## Read-Me-First (every session)
 

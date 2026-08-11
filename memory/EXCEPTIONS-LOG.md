@@ -479,3 +479,55 @@ visible error. Suggested operator check: confirm `qms01-market-open` is
 still `5 14 * * 1-5` UTC, and consider having the routine assert the
 09:30-10:00 ET window is in the past before STEP 4 rather than reading
 an empty bar set as "no trigger".
+
+---
+
+## 2026-08-11 — DEFECT (Section 6.1 tie-break degenerates the consolidation window)
+**Routine:** n/a — found in pre-live code review, never executed against a live candidate
+**Symbol (if applicable):** n/a
+**What happened:** `scripts/lib/indicators.py::find_prior_impulse` returns
+the MOST RECENT bar satisfying Section 6.1's constraints, not the peak of
+the impulse. Because H may never be more recent than `min_h_age` (10)
+sessions, H advances forward one session per session for as long as price
+stays >=30% above any low in the preceding 25 sessions.
+
+Measured (`tests/test_indicators.py::test_consolidation_window_degenerates`),
+same synthetic setup, true peak 140 at index 10, base extended:
+
+```
+true base 10 sessions -> H idx 10 (140) -> consolidation measured 11
+true base 15 sessions -> H idx 15 (134) -> consolidation measured 11
+true base 20 sessions -> H idx 20 (134) -> consolidation measured 11
+true base 30 sessions -> H idx 30 (134) -> consolidation measured 11
+```
+
+Consequences, all of Section 6:
+- **6.2** ("length >= 10 and <= 40 sessions") is effectively inert — the
+  measured length is pinned near 11 whatever the real base does.
+- **6.3, 6.4, 6.5** all measure over `[h_idx, today]`. They analyse an
+  ~11-session slice, not the actual consolidation. 6.4's three segments
+  become 3-4 bars each.
+- **6.7** compares against the wrong reference price: `H = 134` (an
+  ordinary base bar) instead of the true impulse peak `140`.
+
+**Rule that doesn't cover this / was ambiguous:** Section 6.1 states "there
+exist a low L and a later high H" with numeric constraints but does NOT
+specify which pair to select when several qualify. `indicators.py` chose
+"most recent valid H" and documented it as an operator substitution. The
+constraints as written are satisfied by the current behaviour — this is a
+gap in the spec surfacing as a defect in effect, not a violation of a
+stated rule. Section 0.3 forbids the agent resolving it.
+
+**Action taken:** none to the selection rule — it is an operator decision.
+Behaviour is now pinned by characterisation tests
+(`test_H_is_the_most_recent_qualifying_bar_NOT_the_impulse_peak`,
+`test_consolidation_window_degenerates`) so it cannot drift further and so
+the fix is self-announcing: amending 6.1 will make those tests fail.
+
+**Proposed amendment for the operator (NOT applied):** in Section 6.1,
+specify `H = the highest High in the lookback window that satisfies the
+age and span constraints`, with L the lowest Low in the <=25 sessions
+preceding it. That matches the source's "big move -> sideways" reading,
+makes 6.2's window test meaningful, and gives 6.3-6.5 the real base to
+analyse. It will change which setups qualify, which is why it needs the
+operator's pen.

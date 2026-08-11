@@ -231,35 +231,72 @@ IF last trade price > ORH → enter
 ```
 After 10:00 ET, cancel. No entry that day.
 
-### 8.3 Order
+> **Operator amendment 2026-08-11.** Sections 8.3–8.6 below replace the
+> original v1.1 text. The original ordered the steps Order → Initial stop
+> → Stop width validation → Size, which is circular and unexecutable:
+> sizing needs `risk_per_share`, which needs `fill_price`, which does not
+> exist until the order that sizing was supposed to quantify has already
+> filled. Sizing is moved ahead of the order and keyed to `limit_price`
+> (the worst-case fill, known at trigger time) and `session_low_T`, both
+> derivable from the opening-range bars before anything is sent.
+> No parameter in Section 14 is altered. See Section 13.
+
+### 8.3 Pre-trade sizing (evaluated at the moment the trigger fires)
+
+At time T, when last trade price first exceeds ORH:
 ```
-Buy stop-limit
-  stop  = ORH + 0.05%
-  limit = ORH + 0.50%
-Cancel if unfilled after 60 seconds. Never chase.
+session_low_T   = lowest Low from 09:30 ET to T
+limit_price     = ORH × 1.0050          (worst-case fill)
+est_risk_share  = limit_price − session_low_T
 ```
 
-### 8.4 Initial stop
+Validate before sending the order:
 ```
-STOP = low of the day at moment of fill
-```
-Place immediately. The stop never widens. If the low extends after
-entry, the stop does not move.
-
-### 8.5 Stop width validation
-```
-risk_per_share = fill_price − STOP
-IF risk_per_share > (ADR_20 × fill_price)
-    → exit immediately at market, log STOP_TOO_WIDE
+IF est_risk_share <= 0
+    → no trade, log INVALID_RISK
+IF est_risk_share > (ADR_20 × limit_price)
+    → no trade, log STOP_TOO_WIDE_PRETRADE
 ```
 
-### 8.6 Size
+Size:
 ```
 risk_capital = equity × 0.005
-shares       = floor(risk_capital / risk_per_share)
-cap          = floor((equity × 0.20) / fill_price)
+shares       = floor(risk_capital / est_risk_share)
+cap          = floor((equity × 0.20) / limit_price)
 shares       = min(shares, cap)
 IF shares < 1 → no trade
+```
+
+### 8.4 Order
+```
+Buy stop-limit, quantity = shares
+  stop  = ORH × 1.0005
+  limit = ORH × 1.0050
+Cancel if unfilled after 60 seconds. Never chase.
+Never re-send for the same symbol the same day.
+```
+
+### 8.5 Stop placement (after fill)
+```
+session_low_F = lowest Low from 09:30 ET to moment of fill
+STOP          = session_low_F
+```
+Place immediately as a resting stop. The stop never widens.
+If the low extends later in the session, the stop does not move.
+
+### 8.6 Post-fill reconciliation
+```
+actual_risk_share = fill_price − STOP
+actual_risk_pct   = (shares × actual_risk_share) / equity
+```
+Because `fill_price <= limit_price`, actual risk is normally at or below
+planned. It can exceed plan only if the session low extended between
+trigger and fill.
+```
+IF actual_risk_pct > 0.0075
+    → exit immediately at market, log RISK_OVERRUN
+ELSE
+    → log planned vs actual risk and continue
 ```
 Full size in one order. Never scale in. Never add.
 Identical risk on every position regardless of setup quality.
@@ -405,6 +442,12 @@ to override.
 | Break-even stop → half-risk stop (§9.3) | Break-even likely removes the position from the outlier winners |
 | Halt threshold 10% → 25% (§12) | Source describes a 20% drawdown as normal |
 | Added distribution tracking (§11) | A rising win rate is the earliest signal that winners are being cut |
+
+### Operator amendments after v1.1 publication
+
+| Date | Change | Reason |
+|---|---|---|
+| 2026-08-11 | §8.3–8.6 reordered: sizing moved ahead of the order, keyed to `limit_price` and `session_low_T`; post-fill `RISK_OVERRUN` check added at 0.75% | The original ordering was circular and unexecutable — sizing required a `fill_price` that only existed after the order sizing was meant to quantify. The old §8.5 post-fill stop-width check is split: the `ADR_20` test moved pre-trade as `STOP_TOO_WIDE_PRETRADE` (rejects before a position exists rather than opening one and immediately market-exiting it), and §8.6 catches the residual case where the session low extends between trigger and fill. No Section 14 parameter altered. |
 
 ---
 

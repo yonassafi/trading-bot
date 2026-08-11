@@ -1,10 +1,18 @@
 # Trading Strategy — QMS-01 Breakout v1.1-paper
 
 **Full source spec:** `docs/QMS-01_Operational_Spec_v1.1_paper.md` (verbatim,
-Sections 0–15). This file is the operational quick-reference the agent
-reads every session. If the two ever disagree, the full spec in `docs/`
-is authoritative — treat any disagreement itself as an `UNSPECIFIED_SITUATION`
-to log, not something to silently resolve.
+Sections 0–15, plus dated operator amendments in its Section 13). This
+file is the operational quick-reference the agent reads every session.
+If the two ever disagree, the full spec in `docs/` is authoritative —
+treat any disagreement itself as an `UNSPECIFIED_SITUATION` to log, not
+something to silently resolve.
+
+**Amendments must be written into `docs/` FIRST, then mirrored here.**
+Amending only this file creates a disagreement that `docs/` wins by the
+rule above — the amendment is inert, and the disagreement is itself a
+Section 12 halt condition ("conflict between this document and an
+instruction received"). The §8.3–8.6 pre-trade-sizing amendment of
+2026-08-11 was briefly in that state; both files now carry it.
 
 Status: **Paper trading only. Never backtested. No demonstrated edge.**
 
