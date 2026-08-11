@@ -144,19 +144,63 @@ evaluated after the open / after sizing — checked in
   After 10:00 ET, cancel — no entry that day. **Approximated** as a
   single retrospective check at 10:05 ET using 5-minute historical bars
   (operator decision, see below).
-- **8.3 Order**: buy stop-limit, `stop = ORH + 0.05%`, `limit = ORH + 0.50%`.
-  Cancel if unfilled after 60 seconds. Never chase.
-- **8.4 Initial stop**: `STOP = low of the day at moment of fill`. Placed
-  immediately as a real **stop-market** order (operator decision — see
-  below). Never widens.
-- **8.5 Stop width validation**: `risk_per_share = fill_price - STOP`.
-  `IF risk_per_share > (ADR_20 x fill_price) -> exit immediately at
-  market, log STOP_TOO_WIDE`.
-- **8.6 Size**: `risk_capital = equity x 0.005`.
-  `shares = floor(risk_capital / risk_per_share)`.
-  `cap = floor((equity x 0.20)/fill_price)`. `shares = min(shares, cap)`.
-  `IF shares < 1 -> no trade`. Full size in one order. Never scale in.
-  Never add. Identical risk on every position regardless of setup quality.
+### 8.3 Pre-trade sizing (evaluated at the moment the trigger fires)
+
+At time T, when last trade price first exceeds ORH:
+
+    session_low_T   = lowest Low from 09:30 ET to T
+    limit_price     = ORH × 1.0050          (worst-case fill)
+    est_risk_share  = limit_price − session_low_T
+
+Validate before sending the order:
+
+    IF est_risk_share <= 0
+        → no trade, log INVALID_RISK
+    IF est_risk_share > (ADR_20 × limit_price)
+        → no trade, log STOP_TOO_WIDE_PRETRADE
+
+Size:
+
+    risk_capital = equity × 0.005
+    shares       = floor(risk_capital / est_risk_share)
+    cap          = floor((equity × 0.20) / limit_price)
+    shares       = min(shares, cap)
+    IF shares < 1 → no trade
+
+### 8.4 Order
+
+    Buy stop-limit, quantity = shares
+      stop  = ORH × 1.0005
+      limit = ORH × 1.0050
+    Cancel if unfilled after 60 seconds. Never chase.
+    Never re-send for the same symbol the same day.
+
+### 8.5 Stop placement (after fill)
+
+    session_low_F = lowest Low from 09:30 ET to moment of fill
+    STOP          = session_low_F
+
+Place immediately as a resting stop. The stop never widens.
+If the low extends later in the session, the stop does not move.
+
+Placed as a real **stop-market** order (operator decision — see below).
+
+### 8.6 Post-fill reconciliation
+
+    actual_risk_share = fill_price − STOP
+    actual_risk_pct   = (shares × actual_risk_share) / equity
+
+Because fill_price <= limit_price, actual risk is normally at or below
+planned. It can exceed plan only if the session low extended between
+trigger and fill.
+
+    IF actual_risk_pct > 0.0075
+        → exit immediately at market, log RISK_OVERRUN
+    ELSE
+        → log planned vs actual risk and continue
+
+Full size in one order. Never scale in. Never add. Identical risk on
+every position regardless of setup quality.
 
 ## SECTION 9 — POSITION MANAGEMENT (END OF DAY ONLY, in order)
 

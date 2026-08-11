@@ -72,72 +72,86 @@ candidates:
       "no_trigger", move to the next candidate. Do not chase a break
       found after 10:00 ET.
 
-  4d. Order (Section 8.3): place a real stop-limit buy —
-      stop = ORH * 1.0005, limit = ORH * 1.0050 — via:
-      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N","side":"buy","type":"stop_limit","stop_price":"X.XX","limit_price":"X.XX","time_in_force":"day"}'
-      KNOWN SPEC GAP — READ BEFORE PROCEEDING: Section 8.3 does not say
-      what quantity to place here. Sizing (8.6 / step 4g) needs
-      risk_per_share, which needs fill_price, which does not exist until
-      this order fills. The strategy is circular at this point and
-      memory/TRADING-STRATEGY.md does not resolve it. Per Binding
-      Constraint #2 you may NOT invent a sizing basis to fill the gap.
-      Log UNSPECIFIED_SITUATION to memory/EXCEPTIONS-LOG.md naming this
-      exact gap (Section 8.3 quantity undefined), skip this candidate,
-      and continue the loop. Do not place the order. This is expected
-      behaviour until the operator amends Section 8.3.
-      If and only if Section 8.3 has been amended to specify the
-      quantity basis, follow it exactly as written and continue with 4e.
+  4d. PRE-TRADE SIZING (Section 8.3) — everything here is computed
+      BEFORE any order is sent. T = the close of the triggering bar from
+      4c. All inputs come from the bars you already pulled in 4b.
+      session_low_T  = lowest LOW among the 09:30 ET bar through the
+                       triggering bar, inclusive
+      limit_price    = ORH * 1.0050        (worst-case fill)
+      est_risk_share = limit_price - session_low_T
+      Validate BEFORE sending:
+      IF est_risk_share <= 0 -> no trade, log INVALID_RISK, next candidate.
+      IF est_risk_share > (ADR_20 * limit_price) [ADR_20 is in the
+        candidate's CANDIDATES.md row] -> no trade, log
+        STOP_TOO_WIDE_PRETRADE, next candidate.
+      Size:
+      risk_capital = equity * 0.005
+      shares = floor(risk_capital / est_risk_share)
+      cap = floor((equity * 0.20) / limit_price)
+      shares = min(shares, cap)
+      IF shares < 1 -> no trade, log "shares_below_1", next candidate.
+
+  4e. Portfolio-limit pre-check (Section 10) — now checkable before
+      ordering, because shares is known:
+      total_open_risk_pct + (est_risk_share * shares / equity * 100)
+        must stay <= 3.0%, and (shares * limit_price) <= 20% of equity.
+      IF either would be breached -> no trade, log the breach, next
+      candidate. Do not send the order.
+
+  4f. ORDER (Section 8.4):
+      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"<shares>","side":"buy","type":"stop_limit","stop_price":"<ORH*1.0005>","limit_price":"<ORH*1.0050>","time_in_force":"day"}'
       Poll `bash scripts/alpaca.sh orders` for up to 60 seconds. If still
       unfilled after 60 seconds: cancel it (`bash scripts/alpaca.sh
       cancel ORDER_ID`), log "unfilled_60s", move to the next candidate.
-      Never chase — do not re-place at a worse price.
+      Never chase. NEVER re-send for the same symbol the same day, for
+      any reason.
 
-  4e. Initial stop (Section 8.4): STOP = lowest low among the 09:30 ET
-      bar through the triggering bar (inclusive). risk_per_share =
-      fill_price - STOP.
+  4g. STOP PLACEMENT (Section 8.5) — immediately after fill:
+      Pull bars from 09:30 ET through the actual fill time (this is a
+      LATER window than 4b — the fill happens around now, not at T):
+      bash scripts/alpaca.sh bars "symbols=SYM&timeframe=5Min&start=<today 09:30 ET as UTC>&end=<now as UTC>&limit=200&feed=iex"
+      session_low_F = lowest LOW across that whole range
+      STOP = session_low_F
+      Place it immediately as a real stop-market order (Operator
+      Substitutions explains why stop-market, not stop-limit):
+      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"<shares>","side":"sell","type":"stop","stop_price":"<STOP>","time_in_force":"gtc"}'
+      The stop NEVER widens. If the low extends later in the session it
+      does not move.
 
-  4f. Stop width validation (Section 8.5): IF risk_per_share >
-      (ADR_20 x fill_price) [ADR_20 is in the candidate's CANDIDATES.md
-      row] -> exit immediately at market
-      (bash scripts/alpaca.sh close SYM), log STOP_TOO_WIDE to
-      memory/EXCEPTIONS-LOG.md, do NOT create a position, move to the
-      next candidate.
+  4h. POST-FILL RECONCILIATION (Section 8.6):
+      actual_risk_share = fill_price - STOP
+      actual_risk_pct   = (shares * actual_risk_share) / equity
+      IF actual_risk_pct > 0.0075 -> exit immediately at market and log
+        RISK_OVERRUN. Cancel the resting stop from 4g FIRST
+        (bash scripts/alpaca.sh cancel STOP_ORDER_ID), THEN
+        bash scripts/alpaca.sh close SYM. Leaving a live sell-stop on
+        shares you no longer hold is itself a hazard. Do NOT create a
+        position; move to the next candidate.
+      ELSE log planned (est_risk_share) vs actual (actual_risk_share)
+        risk and continue.
 
-  4g. Size (Section 8.6):
-      risk_capital = equity * 0.005
-      shares = floor(risk_capital / risk_per_share)
-      cap = floor((equity * 0.20) / fill_price)
-      shares = min(shares, cap)
-      IF shares < 1: no trade, log "shares_below_1", move on.
+  4i. Liquidity exclusion (Section 7): IF (shares * fill_price) >
+      0.01 * dollar_volume_50d_avg [from the candidate's CANDIDATES.md
+      row] -> cancel the resting stop first, then exit immediately at
+      market, log the exclusion, do NOT keep the position.
 
-  4h. Liquidity exclusion (Section 7, only checkable once size is known):
-      IF (shares * fill_price) > 0.01 * dollar_volume_50d_avg [from the
-      candidate's CANDIDATES.md row]: this candidate already filled at
-      4d — exit immediately at market (like 4f), log the exclusion, do
-      NOT keep the position.
-
-  4i. Portfolio-limit re-check: total_open_risk_pct + (risk_per_share *
-      shares / equity * 100) must stay <= 3.0%, and (shares * fill_price)
-      must stay <= 20% of equity. If either would be breached: exit
-      immediately at market, log the breach, do NOT keep the position.
-
-  4j. Place the resting protective stop as a real stop-market order
-      (memory/TRADING-STRATEGY.md's Operator Substitutions explains why
-      stop-market, not stop-limit):
-      bash scripts/alpaca.sh order '{"symbol":"SYM","qty":"N","side":"sell","type":"stop","stop_price":"STOP","time_in_force":"gtc"}'
-
-  4k. Record the position in memory/POSITIONS.json "open" (entry_date,
-      fill_price, initial_stop, risk_per_share, shares,
-      shares_remaining=shares, partial_taken=false, current_stop=STOP,
-      reference_sma_period from the candidate row, sessions_held=0,
+  4j. Record the position in memory/POSITIONS.json "open" (entry_date,
+      fill_price, initial_stop=STOP, risk_per_share=actual_risk_share,
+      shares, shares_remaining=shares, partial_taken=false,
+      current_stop=STOP, reference_sma_period from the candidate row,
+      sessions_held=0,
       entry_mechanism="retrospective_10ET_approximation",
       consolidation_high_ref from the candidate row).
+      Note risk_per_share is the ACTUAL value from 4h, not the 4d
+      estimate — everything downstream (Section 9 stop management,
+      r_multiple, distribution tracking) keys off the real fill.
 
-  4l. Append the entry to memory/TRADE-LOG.md per the format in that
-      file's header.
+  4k. Append the entry to memory/TRADE-LOG.md per the format in that
+      file's header. Include both planned and actual risk per share.
 
-  4m. Increment open_count and entries_today_so_far; decrement
-      remaining_slots; update total_open_risk_pct.
+  4l. Increment open_count and entries_today_so_far; decrement
+      remaining_slots; update total_open_risk_pct using
+      actual_risk_share.
 
 STEP 5 — Any rejection at any sub-step gets logged with the symbol and
 the first disqualifying rule — same discipline as the screener.

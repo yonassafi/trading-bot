@@ -40,7 +40,7 @@ fi
 # delimiter, so any message with an odd number of underscores is rejected
 # with 400 "can't parse entities" and never delivered. The tokens this
 # system exists to raise alarms about are exactly the ones that break it:
-# UNSPECIFIED_SITUATION (Section 0.3/11), STOP_TOO_WIDE (Section 8.5),
+# UNSPECIFIED_SITUATION (Section 0.3/11), RISK_OVERRUN (Section 8.6),
 # risk_per_share, POSITIONS.json field names. Verified live 2026-08-11.
 # No alert text in this system relies on Markdown rendering, so plain
 # text is strictly safer. Do not add parse_mode back.
