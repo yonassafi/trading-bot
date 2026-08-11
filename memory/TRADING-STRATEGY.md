@@ -403,11 +403,48 @@ own rejected claims.
 - **Peak-equity / drawdown tracking**: `memory/RISK-STATE.json`, updated
   every `daily-summary` run.
 
+## SECTION 15 — DATA FEED: §8 IS SUSPENDED ON THE FREE TIER
+
+*Operator determination 2026-08-11. Full text in
+`docs/QMS-01_Operational_Spec_v1.1_paper.md` §15, which is authoritative.*
+
+**Live intraday execution requires a paid real-time SIP subscription.
+`market-open` stays DISABLED and places no entries.**
+
+Free-tier real-time is IEX only — a small single-digit share of
+consolidated volume. Applied to §8 that is a directional bias, not noise:
+IEX prints fewer trades, so its 5-minute high understates `ORH` and its
+low overstates the session low; `est_risk_share` is therefore understated;
+and §8.3 divides `risk_capital` by that understated figure, so `shares`
+comes out **oversized**. An oversized position is a Section 10 breach.
+
+Firing later (~10:20 ET) to clear the 15-minute SIP delay was considered
+and **rejected**: acting 20+ minutes after the trigger means the fill
+bears no relation to `ORH × 1.0050` and the stop none to the session low
+at trigger. That is a different entry rule with unknown behaviour, not
+§8.2 with latency.
+
+Rules now in force:
+1. `market-open` DISABLED. Do not re-enable without real-time SIP.
+2. All historical/daily work uses `feed=sip`, `end` >= 15 minutes old.
+   NEVER fall back to IEX silently — a request that cannot be served by
+   SIP fails loudly and logs `DATA_FEED_UNAVAILABLE`.
+3. Any code path computing `ORH`, a session low, or a position size must
+   assert `feed == "sip"` and raise otherwise.
+4. There is deliberately NO config flag to override this. Re-enabling
+   live entries is a spec amendment, not a setting.
+
+Sections 4–7 are unaffected — the screener reads completed prior
+sessions, where the delay never binds.
+
 ## Known Gaps for v1.0 (documented, not silently absorbed)
 
 - No earnings-date exclusion (§7) or earnings-hold rule (§9.5).
 - No sector-concentration cap (§10).
-- Dollar-volume figures reflect IEX feed, not full consolidated volume.
 - ADR/common-stock separation is best-effort name-regex, not authoritative.
 - Entry detection is a retrospective 10:05 ET approximation, not true
-  real-time order racing against the market.
+  real-time order racing against the market — and per Section 15 above it
+  is SUSPENDED entirely until a real-time SIP feed exists.
+- (Resolved 2026-08-11: dollar-volume figures previously reflected the
+  IEX feed and understated consolidated volume by a measured median of
+  28.7x. The screener now uses `feed=sip`.)

@@ -84,7 +84,17 @@ def fetch_daily_bars(symbol, days=15):
     now = datetime.now(timezone.utc)
     end = (now - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
     start = (now - timedelta(days=days)).date()
-    qs = f"symbols={symbol}&timeframe=1Day&start={start}&end={end}&limit=100&feed=sip"
+    feed = "sip"
+    # SIP-ONLY (Section 15). 9.4's trailing exit fires on a CLOSE below
+    # the reference SMA; that close and that SMA must come off the
+    # consolidated tape. Asserted rather than merely hardcoded so an edit
+    # that parameterises this later cannot quietly reintroduce IEX.
+    if feed != "sip":
+        raise RuntimeError(
+            f"DATA_FEED_UNAVAILABLE: position management requires "
+            f"feed='sip', got {feed!r}. Section 15 — no override."
+        )
+    qs = f"symbols={symbol}&timeframe=1Day&start={start}&end={end}&limit=100&feed={feed}"
     resp = run_alpaca("bars", qs)
     bars = resp.get("bars", {}).get(symbol, []) or []
     bars.sort(key=lambda b: b["t"])

@@ -94,9 +94,45 @@ case "$cmd" in
   bars)
     # Raw querystring passthrough so screener.py/position_manager.py can
     # drive multi-symbol batching and page_token pagination themselves.
-    # Usage: bars "symbols=AAPL,MSFT&timeframe=1Day&start=...&end=...&limit=10000[&page_token=...][&feed=...]"
+    # Usage: bars "symbols=AAPL,MSFT&timeframe=1Day&start=...&end=...&limit=10000&feed=sip[&page_token=...]"
     qs="${1:?usage: bars '<querystring>'}"
-    req -H "$H_KEY" -H "$H_SEC" "$DATA/stocks/bars?$qs"
+
+    # SIP-ONLY (Section 15, operator determination 2026-08-11).
+    # feed=sip is MANDATORY and there is deliberately no override.
+    #
+    # IEX is a small single-digit share of consolidated volume, so its
+    # 5-minute high understates ORH and its low overstates the session
+    # low. est_risk_share = limit_price - session_low_T is therefore
+    # understated, and Section 8.3 divides risk_capital by it — producing
+    # an OVERSIZED position. That is a Section 10 risk-limit breach, not
+    # a data-quality annoyance, which is why this is enforced in code
+    # rather than left to the prompt.
+    #
+    # This guard is also what keeps market-open non-functional while
+    # Section 15 suspends it: its opening-range pull cannot be served.
+    # That is intended. Re-enabling live entries requires a real-time SIP
+    # subscription AND a spec amendment — not a flag here.
+    case "$qs" in
+      *feed=sip*) ;;
+      *)
+        echo "DATA_FEED_UNAVAILABLE: bars request must specify feed=sip." >&2
+        echo "Section 15: IEX understates ORH and overstates the session" >&2
+        echo "low, which understates risk_per_share and OVERSIZES the" >&2
+        echo "position — a Section 10 breach. There is no override." >&2
+        echo "Rejected querystring: $qs" >&2
+        exit 1
+        ;;
+    esac
+
+    if ! req -H "$H_KEY" -H "$H_SEC" "$DATA/stocks/bars?$qs"; then
+      # A SIP request that cannot be served (commonly: `end` reaches into
+      # the free plan's ~15-minute delay window) must fail loudly, never
+      # degrade to IEX.
+      echo "DATA_FEED_UNAVAILABLE: SIP bars request failed. Do NOT retry" >&2
+      echo "this with feed=iex. If 'end' is within ~15 minutes of now," >&2
+      echo "move it back; otherwise treat as a Section 12 data-feed gap." >&2
+      exit 1
+    fi
     ;;
   order)
     require_paper

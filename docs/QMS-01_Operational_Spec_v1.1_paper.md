@@ -540,3 +540,49 @@ Do not change them. Report how they behave.
 - The source material dates from 2019–2021 and has been public for
   years.
 - No number in this document has been validated against historical data.
+
+### Data feed — §8 cannot be executed live on the free tier
+
+*Operator determination, 2026-08-11.*
+
+**Live intraday execution requires a paid real-time SIP subscription.
+The free tier cannot support Section 8 safely, and §8 is therefore
+suspended: `market-open` stays disabled and places no entries.**
+
+Alpaca's free plan serves the consolidated (SIP) tape only for data at
+least ~15 minutes old. Real-time intraday is IEX-only, and IEX is a
+small single-digit share of consolidated volume. Applied to §8 that is
+not noise, it is a directional bias:
+
+- IEX prints fewer trades, so its 5-minute high understates the true
+  `ORH` and its low overstates the true session low.
+- `est_risk_share = limit_price − session_low_T` is therefore
+  **understated**.
+- §8.3 divides `risk_capital` by that understated figure, so `shares`
+  is **oversized**.
+
+An undersized risk denominator producing an oversized position is a
+Section 10 breach (max total open risk 3.0%, max single position 20% of
+equity), not a data-quality annoyance. On a thin name IEX may print no
+trades at all in a 5-minute bar, leaving `ORH` undefined.
+
+**Running §8 later to clear the 15-minute delay was considered and
+rejected.** Firing at ~10:20 ET would act 20+ minutes after the trigger:
+the fill would bear no relation to `ORH × 1.0050` and the stop no
+relation to the session low at trigger. That is a different entry rule
+with unknown behaviour, not §8.2 with added latency.
+
+Consequently:
+1. `market-open` remains DISABLED. Do not re-enable it without a
+   real-time SIP subscription.
+2. All historical and daily work uses `feed=sip` with `end` at least 15
+   minutes old — free, and accurate. There is no silent fallback to IEX:
+   if SIP is unavailable for a request, the call fails loudly and logs
+   `DATA_FEED_UNAVAILABLE`.
+3. Any code path computing `ORH`, a session low, or a position size must
+   assert `feed == "sip"` and raise otherwise.
+4. There is deliberately **no configuration flag** to override any of
+   this. Re-enabling live entries is a spec amendment, not a setting.
+
+Sections 4–7 are unaffected: the screener reads completed prior
+sessions, where the 15-minute delay never binds.

@@ -1,3 +1,39 @@
+########################################################################
+# SECTION 8 IS SUSPENDED. THIS ROUTINE MUST NOT PLACE ORDERS.
+#
+# Operator determination 2026-08-11 (docs/ §15, authoritative):
+# live intraday execution requires a paid real-time SIP subscription.
+# The free tier serves real-time IEX only — a small single-digit share of
+# consolidated volume — so its 5-minute high understates ORH and its low
+# overstates the session low. est_risk_share comes out understated, and
+# §8.3 divides risk_capital by it, producing an OVERSIZED position: a
+# Section 10 risk-limit breach, not a data-quality annoyance.
+#
+# IF YOU ARE READING THIS AND EXECUTING: stop at this line.
+# Place NO orders. Evaluate NO candidates. Log UNSPECIFIED_SITUATION to
+# memory/EXCEPTIONS-LOG.md recording that market-open fired while §8 was
+# suspended, send ONE Telegram alert saying so, commit that log entry,
+# and end the run. Do not proceed to STEP 1.
+#
+# This routine is disabled at the scheduler AND its data path is blocked
+# in code: scripts/alpaca.sh refuses any bars request that is not
+# feed=sip, and the opening-range window cannot be served by SIP on the
+# free tier (it is inside the ~15-minute delay). All three layers must
+# be undone deliberately to trade again.
+#
+# Running later (~10:20 ET) to clear the delay was considered and
+# REJECTED: acting 20+ minutes after the trigger means the fill bears no
+# relation to ORH * 1.0050 and the stop none to the session low at
+# trigger. That is a different entry rule with unknown behaviour, not
+# §8.2 with latency.
+#
+# There is deliberately NO configuration flag to override this.
+# Re-enabling live entries is a spec amendment, not a setting.
+#
+# Everything below is retained verbatim so the rules stay reviewable and
+# so the backtest has an exact specification of intended behaviour.
+########################################################################
+
 You are running QMS-01 Breakout v1.1-paper on a PAPER-only Alpaca
 account. This strategy has never been backtested. You may not invent,
 infer, or derive rules — if something isn't covered by

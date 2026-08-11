@@ -149,6 +149,19 @@ def fetch_bars_batch(symbols, days, feed=None):
     """Daily bars for a batch of symbols via scripts/alpaca.sh bars,
     following next_page_token. Returns {symbol: [bar,...]} ascending by
     time."""
+    # SIP-ONLY (Section 15). Every figure this function feeds — ADR_20,
+    # 50-day dollar volume, the momentum percentiles, every Section 6
+    # high and low — must come off the consolidated tape. IEX understates
+    # highs and overstates lows, which understates risk and oversizes
+    # positions: a Section 10 breach. Asserted here as well as in
+    # scripts/alpaca.sh so a caller cannot reach the network with the
+    # wrong feed, and deliberately with NO override parameter.
+    if feed != "sip":
+        raise RuntimeError(
+            f"DATA_FEED_UNAVAILABLE: fetch_bars_batch requires feed='sip', "
+            f"got {feed!r}. Section 15 forbids computing any high, low or "
+            "position size from IEX data. There is no override."
+        )
     if not symbols:
         return {}
     # Alpaca's free plan serves SIP history only OUTSIDE a ~15-minute
