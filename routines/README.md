@@ -42,7 +42,7 @@ actually deployed. Minimum interval is 1 hour.
 | Routine | ET | Cron (UTC, EDT) | What it does |
 |---|---|---|---|
 | `pre-market.md` | 07:00 Mon-Fri | `0 11 * * 1-5` | Runs `scripts/screener.py`: regime check, universe filter, setup scan, ranks candidates. No trading. |
-| `market-open.md` | **SUSPENDED** | `5 14 * * 1-5` (disabled) | **Section 8 is suspended — see §15.** Live intraday execution needs a paid real-time SIP feed; free-tier IEX understates ORH and overstates the session low, which oversizes positions (a §10 breach). Disabled at the scheduler, refused in `scripts/alpaca.sh` (bars must be `feed=sip`), and gated by a stop-block at the top of the prompt. No entries are placed. |
+| `market-open.md` | 10:20 Mon-Fri | `20 14 * * 1-5` | **Amended 2026-08-11 (b) — confirmed-hold market entry.** Enters at market if a 09:35-10:00 bar closed above ORH AND the 09:55-10:00 bar also closed above ORH. 10:20, not 10:05: every input comes from the 09:30-10:00 window, so at 10:20 all of it clears the free-SIP 15-minute delay. Currently **disabled** pending end-to-end verification. |
 | `midday.md` | 12:30 Mon-Fri | `30 16 * * 1-5` | No trading — QMS-01's Section 9 is end-of-day only. A no-op heartbeat that only alerts if a position is missing its resting stop. Safe to disable entirely. |
 | `daily-summary.md` | 16:30 Mon-Fri | `30 20 * * 1-5` | Reconciles fills, runs `scripts/position_manager.py` (Section 9.2-9.4), checks the 25%-drawdown halt condition, posts the EOD summary. |
 | `weekly-review.md` | Fri 17:15 | `15 21 * * 5` | Distribution-tracking report only. Never modifies `memory/TRADING-STRATEGY.md`. |
@@ -57,7 +57,7 @@ retrospectively even exists. EST values:
 | Routine | Cron (UTC, EST) |
 |---|---|
 | `pre-market.md` | `0 12 * * 1-5` |
-| `market-open.md` | `5 15 * * 1-5` |
+| `market-open.md` | `20 15 * * 1-5` |
 | `midday.md` | `30 17 * * 1-5` |
 | `daily-summary.md` | `30 21 * * 1-5` |
 | `weekly-review.md` | `15 22 * * 5` |
