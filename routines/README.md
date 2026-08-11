@@ -1,9 +1,30 @@
 # Cloud Routines — QMS-01 Breakout v1.1-paper
 
-These five prompts are the production path. Each gets pasted verbatim
-into a Claude Code cloud routine (Routines → New Routine → paste into the
-prompt field). Do not paraphrase — the env-var check block, the halt
-check, and the commit-and-push step are all load-bearing.
+These five prompts are the production path, and **these files are what
+actually runs**. Editing one here changes production on the next firing.
+
+## How the deployed routine finds its prompt (changed 2026-08-11)
+
+Each cloud routine's prompt field no longer contains a copy of the
+instructions. It contains a short pointer that says: *read
+`routines/<name>.md` from this repository, in full, and follow it
+exactly*, plus a fail-closed clause — if the file is missing, empty or
+truncated, place no orders, alert, and stop.
+
+Why: the deployed copy and the file here drifted apart **twice** in a
+single day. Once on a starting-equity figure that would have overstated
+every Phase P&L by $90,000, and once on the detached-HEAD persistence fix
+that was committed here but never reached the running routine. Two copies
+of a rulebook is the same defect as `docs/` vs `memory/` disagreeing —
+one source of truth, or you get silent divergence.
+
+Consequence to keep in mind: **there is no longer a staging step.** A
+commit to `routines/*.md` on `main` is live. Nothing needs re-pasting;
+nothing can be left un-synced.
+
+Do not paraphrase these files when editing — the env-var check block, the
+halt check, the window guard and the commit-and-push step are all
+load-bearing.
 
 **This cadence is different from a typical "trade at the open" bot.**
 QMS-01's entry detection is a retrospective check against the 09:30-10:00
