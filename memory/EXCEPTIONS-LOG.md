@@ -416,3 +416,66 @@ live broker positions. Suggested operator fix: add
 `git rev-parse --abbrev-ref HEAD` (or `git checkout -B main HEAD`) to
 the STEP 6 block of every routine, ahead of the commit, and require the
 push exit status to be checked.
+
+---
+
+## 2026-08-11 03:01 ET — OTHER (run fired before its window, no trading impact)
+**Routine:** market-open (run date per `date +%Y-%m-%d` = 2026-08-11)
+**Symbol (if applicable):** n/a
+**What happened:** This `market-open` run executed at **07:01 UTC =
+03:01 ET**, roughly seven hours before the deployed `5 14 * * 1-5` UTC
+(10:05 ET) slot in `routines/README.md`, and before the regular session
+opened at all.
+
+The routine's premise is that it fires strictly *after* the 09:30-10:00
+ET opening range closes, because Section 8.2 entry detection is a
+retrospective read of that window's 5-minute bars. That window did not
+exist yet. Verified rather than assumed:
+
+```
+bars symbols=ONEQ&timeframe=5Min&start=2026-08-11T13:30:00Z&end=2026-08-11T14:00:00Z&feed=iex
+  -> {"bars":{},"next_page_token":null}
+most recent 1Day bar for ONEQ -> t=2026-08-10T04:00:00Z
+```
+
+**No trading impact today, for an independent reason:** today's dated
+section in `memory/CANDIDATES.md` records regime PASS with **zero**
+Stage B candidates, so STEP 4's loop had nothing to iterate over. The
+no-entry outcome is what the rules produce at any hour today.
+`memory/POSITIONS.json` is empty and `alpaca.sh positions` / `orders`
+both returned `[]`, so there is no state drift and nothing was left
+unmanaged.
+
+**Rule that doesn't cover this / was ambiguous:** none engaged. Section
+0.3 was not reached: with an empty candidate list no rule had to be
+applied, inferred, or filled in, so no judgement call was made. Section
+12 was considered and does not apply — no order was placed or rejected,
+no data-feed gap (the empty intraday response is correct for a market
+that has not opened), and no conflict between an instruction and
+`memory/TRADING-STRATEGY.md`. Cron timing is an operator deployment
+setting, not a strategy parameter; Section 14 is untouched.
+
+**Action taken:** none — no orders sent, no files changed beyond this
+record. Entry detection was not attempted against the empty window.
+
+**Not a repeat of the closed 2026-08-10 21:00 ET false alarm.** That
+entry claimed the *cron itself* was misconfigured and was correctly
+closed — the deployed cron is UTC and correct, and the odd firing time
+was a manual test trigger from a local session. This entry makes no
+claim about the cron. It records only what this execution did, because
+the deployed schedule cannot be inspected from inside the container:
+`CronList` returns only jobs created via `CronCreate` in-session, and
+cloud routine schedules live in the claude.ai/code routine panel. The
+07:01 UTC firing is equally consistent with another off-hours manual
+trigger (07:01 UTC = 10:01 Europe/Vilnius, the operator's clock).
+
+**Why it is still worth a record:** this is the exact failure shape
+`routines/README.md` flags as a live hazard in its DST section — a
+`market-open` that fires before the opening range exists finds no bars,
+enters nothing, and reports success. Today that is indistinguishable
+from a correct quiet day, because zero candidates also produce zero
+entries. On a day with candidates it would be a silent miss, not a
+visible error. Suggested operator check: confirm `qms01-market-open` is
+still `5 14 * * 1-5` UTC, and consider having the routine assert the
+09:30-10:00 ET window is in the past before STEP 4 rather than reading
+an empty bar set as "no trigger".
