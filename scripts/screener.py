@@ -435,7 +435,12 @@ def write_candidates_md(date_str, regime, universe_count, stage_a_count,
     lines.append("")
 
     lines.append("**Rejection counts (first disqualifying rule):**")
-    for rule, count in sorted(rejection_counts.items(), key=lambda x: -x[1]):
+    # Sort by count DESC then rule name ASC. Sorting on count alone left
+    # equal-count rules in dict-insertion order, which varies run to run
+    # with whichever symbol hit which rule first — so re-running the same
+    # screen produced a spurious diff and a noise commit that looked like
+    # the screen had changed when nothing had.
+    for rule, count in sorted(rejection_counts.items(), key=lambda x: (-x[1], x[0])):
         lines.append(f"- {rule}: {count}")
     lines.append("")
 
