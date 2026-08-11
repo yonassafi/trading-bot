@@ -246,20 +246,29 @@ def stage_b_setup_scan(survivor_symbols, open_syms, recent_stopouts, feed=None):
         full_bars.update(bars_map)
 
     returns_21, returns_63, returns_126 = {}, {}, {}
+    # Symbols dropped here used to hit a bare `continue` and never reach
+    # `rejections`, so they vanished from the accounting Section 11
+    # requires ("per rejection: symbol, first disqualifying rule"). Stage A
+    # already logs the identical condition as "insufficient_history"
+    # (see stage_a, ~line 219); Stage B now matches it.
+    insufficient_history = []
     for sym in survivor_symbols:
         bars = full_bars.get(sym, [])
         if len(bars) < 127:
+            insufficient_history.append(sym)
             continue
         r21 = ind.pct_return(bars, 21)
         r63 = ind.pct_return(bars, 63)
         r126 = ind.pct_return(bars, 126)
         if None in (r21, r63, r126):
+            insufficient_history.append(sym)
             continue
         returns_21[sym], returns_63[sym], returns_126[sym] = r21, r63, r126
 
     pop21, pop63, pop126 = list(returns_21.values()), list(returns_63.values()), list(returns_126.values())
 
     candidates, rejections = [], []
+    rejections.extend((sym, "insufficient_history") for sym in insufficient_history)
 
     for sym in returns_21:
         if sym in open_syms:

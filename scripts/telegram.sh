@@ -36,13 +36,36 @@ if [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]]; then
   exit 0
 fi
 
+# NO parse_mode. Telegram's legacy Markdown treats `_` as an italic
+# delimiter, so any message with an odd number of underscores is rejected
+# with 400 "can't parse entities" and never delivered. The tokens this
+# system exists to raise alarms about are exactly the ones that break it:
+# UNSPECIFIED_SITUATION (Section 0.3/11), STOP_TOO_WIDE (Section 8.5),
+# risk_per_share, POSITIONS.json field names. Verified live 2026-08-11.
+# No alert text in this system relies on Markdown rendering, so plain
+# text is strictly safer. Do not add parse_mode back.
 payload="$(python3 -c "
 import json, sys
-print(json.dumps({'chat_id': sys.argv[1], 'text': sys.argv[2], 'parse_mode': 'Markdown'}))
+print(json.dumps({'chat_id': sys.argv[1], 'text': sys.argv[2]}))
 " "$TELEGRAM_CHAT_ID" "$msg")"
 
-curl -fsS -X POST \
+# Capture body and status separately so a delivery failure is loud rather
+# than a bare curl exit code a caller might not check.
+http_body="$(mktemp)"
+trap 'rm -f "$http_body"' EXIT
+code="$(curl -sS -o "$http_body" -w '%{http_code}' -X POST \
   "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
   -H "Content-Type: application/json" \
-  -d "$payload"
+  -d "$payload" || echo "000")"
+
+if [[ "$code" != "200" ]]; then
+  echo "TELEGRAM DELIVERY FAILED (HTTP $code) — alert was NOT received:" >&2
+  cat "$http_body" >&2
+  echo >&2
+  printf "\n---\n## %s (UNDELIVERED — Telegram HTTP %s)\n%s\n" "$stamp" "$code" "$msg" >> "$FALLBACK"
+  echo "[telegram] message written to DAILY-SUMMARY.md instead" >&2
+  exit 1
+fi
+
+cat "$http_body"
 echo
