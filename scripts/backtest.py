@@ -50,6 +50,7 @@ Usage:
 import argparse
 import json
 import math
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -79,8 +80,13 @@ STARTING_EQUITY = 100_000.0
 
 
 def alpaca_bars(qs):
+    # Generous per-request budget: a bulk daily pull is 100 symbols x
+    # ~500 sessions. scripts/alpaca.sh discards a timed-out response
+    # entirely rather than returning it partially, so the cost of a too-
+    # small budget is a hard failure, not silent corruption.
+    env = {**os.environ, "ALPACA_HTTP_TIMEOUT": "600"}
     r = subprocess.run(["bash", str(ALPACA_SH), "bars", qs],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=660, env=env)
     if r.returncode != 0:
         raise RuntimeError(f"bars failed: {r.stderr.strip()[:400]}")
     return json.loads(r.stdout)
@@ -97,7 +103,9 @@ def fetch_daily_history(symbols, start, end):
         return json.loads(key.read_text())
 
     out = {}
-    B = 100
+    # 40, not 100. A 100-symbol x 500-session request is ~500KB+ and was
+    # timing out mid-transfer during the first full-universe run.
+    B = 40
     for i in range(0, len(symbols), B):
         batch = symbols[i:i + B]
         tok = None

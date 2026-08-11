@@ -51,16 +51,46 @@ require_paper() {
 # --max-time bounds a hung request. Without it a stalled call can hang a
 # routine that may have just placed a live order it is no longer watching.
 req() {
-  local body status
+  local body status rc
   body="$(mktemp)"; trap 'rm -f "$body"' RETURN
-  status="$(curl -sS --max-time 45 -o "$body" -w '%{http_code}' "$@" || echo 000)"
-  if [[ "$status" != "2"* ]]; then
+
+  # curl's exit code is captured SEPARATELY from its stdout. The earlier
+  # form was:
+  #     status="$(curl ... -w '%{http_code}' ... || echo 000)"
+  # On a timeout curl emits "200" (it already saw the headers) AND the
+  # `||` appended "000", so status became "200\n000" — which still
+  # matches 2* . The guard passed, the PARTIAL body was written to
+  # stdout, and the caller saw a clean exit with truncated JSON. That is
+  # a silent data-corruption path: a half-downloaded bars response would
+  # feed incomplete history into ADR_20, 50-day dollar volume and every
+  # Section 6 high/low, producing confident wrong candidates. Verified by
+  # a backtest bulk fetch dying on JSONDecodeError at ~2100 symbols.
+  #
+  # Timeout is generous and overridable because legitimate requests vary
+  # by three orders of magnitude: one quote versus 100 symbols x 500
+  # sessions of daily bars.
+  status="$(curl -sS --max-time "${ALPACA_HTTP_TIMEOUT:-180}" \
+            -o "$body" -w '%{http_code}' "$@")"
+  rc=$?
+
+  if [[ $rc -ne 0 ]]; then
+    echo "ALPACA TRANSFER FAILED (curl exit $rc, http '${status:-none}')" >&2
+    echo "for: ${*: -1}" >&2
+    [[ $rc -eq 28 ]] && echo "curl 28 = timeout. The response may be PARTIAL;" >&2
+    [[ $rc -eq 28 ]] && echo "it is discarded, never returned. Raise ALPACA_HTTP_TIMEOUT" >&2
+    [[ $rc -eq 28 ]] && echo "or request fewer symbols / a shorter window." >&2
+    head -c 400 "$body" >&2; echo >&2
+    return 1
+  fi
+
+  if [[ "$status" != 2?? ]]; then
     echo "ALPACA HTTP $status for: ${*: -1}" >&2
     echo "--- response body (the rejection reason) ---" >&2
     cat "$body" >&2
     echo >&2
     return 1
   fi
+
   cat "$body"
 }
 
