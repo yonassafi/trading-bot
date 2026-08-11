@@ -233,7 +233,20 @@ def run(start, end, universe_limit, out_path):
 
     hist_start = (datetime.fromisoformat(start) - timedelta(days=400)).date().isoformat()
     print(f"Fetching daily history {hist_start} -> {end}...", file=sys.stderr)
-    daily = fetch_daily_history(universe, hist_start, end)
+    # REGIME_PROXY must be fetched EXPLICITLY. ONEQ is an ETF, and
+    # fetch_tradable_universe() strips ETFs by name for Section 5 — so the
+    # proxy is never in `universe`. Without this the regime check reads an
+    # empty bar list and fails every single session, silently producing a
+    # zero-trade backtest that looks like "the strategy never qualified"
+    # rather than "the harness never fetched the index".
+    fetch_syms = list(dict.fromkeys(universe + [screener.REGIME_PROXY]))
+    daily = fetch_daily_history(fetch_syms, hist_start, end)
+    if not daily.get(screener.REGIME_PROXY):
+        raise RuntimeError(
+            f"No bars for regime proxy {screener.REGIME_PROXY}. Section 4 "
+            "cannot be evaluated; refusing to report a zero-trade result "
+            "that would be indistinguishable from a real one."
+        )
 
     sessions = sorted({b["t"][:10] for bars in daily.values() for b in bars})
     sessions = [d for d in sessions if start <= d <= end]
