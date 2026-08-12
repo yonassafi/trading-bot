@@ -37,3 +37,30 @@ reproduced here since neither used a real day's full scan.)
 - no_reference_sma: 2
 - extended_beyond_base: 1
 
+
+## 2026-08-12 — Pre-market Screener
+
+**Regime (ONEQ):** PASS
+10 SMA: 102.3794 (yesterday 101.7634) | 20 SMA: 101.3217 (yesterday 101.2567)
+
+**Universe:** 5908 tradable common-stock candidates
+**Stage A survivors (price/liquidity/ADR):** 1113
+**Stage B candidates (post setup-scan/exclusions):** 1
+
+| Rank | Symbol | 63d Return | ADR_20 | Last Close | Ref SMA | Consol. High | $Vol 50d Avg |
+|---|---|---|---|---|---|---|---|
+| 1 | FBRX | 195.65% | 5.34% | $76.87 | 10 | $76.68 | $76,019,605 |
+
+**Rejection counts (first disqualifying rule):**
+- dollar_volume: 1721
+- price_below_5: 1575
+- adr_below_4pct: 1340
+- momentum_percentile: 1071
+- insufficient_history: 187
+- consolidation_window: 3
+- higher_lows_failed: 3
+- close_below_50sma_in_consolidation: 2
+- close_below_reference_sma_recently: 2
+- no_reference_sma: 2
+- extended_beyond_base: 1
+
