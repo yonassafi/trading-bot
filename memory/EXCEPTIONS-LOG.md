@@ -531,3 +531,83 @@ preceding it. That matches the source's "big move -> sideways" reading,
 makes 6.2's window test meaningful, and gives 6.3-6.5 the real base to
 analyse. It will change which setups qualify, which is why it needs the
 operator's pen.
+
+---
+
+## 2026-08-14 17:15 ET — UNSPECIFIED_SITUATION (docs/memory disagreement on §15)
+**Routine:** weekly-review
+**Symbol (if applicable):** n/a
+**What happened:** `memory/TRADING-STRATEGY.md` and
+`docs/QMS-01_Operational_Spec_v1.1_paper.md` state opposite things about
+§15 and §8. CLAUDE.md: "If the two disagree, `docs/` wins and the
+disagreement is itself an `UNSPECIFIED_SITUATION` — log it, never
+resolve it silently."
+
+`memory/TRADING-STRATEGY.md` (pre-amendment text, still present):
+```
+**Live intraday execution requires a paid real-time SIP subscription.
+`market-open` stays DISABLED and places no entries.**
+...
+Firing later (~10:20 ET) to clear the 15-minute SIP delay was considered
+and **rejected**: acting 20+ minutes after the trigger means the fill
+bears no relation to `ORH × 1.0050` and the stop none to the session low
+at trigger. That is a different entry rule with unknown behaviour, not
+§8.2 with latency.
+
+Rules now in force:
+1. `market-open` DISABLED. Do not re-enable without real-time SIP.
+```
+and in its Known Gaps:
+```
+- Entry detection is a retrospective 10:05 ET approximation, not true
+  real-time order racing against the market — and per Section 15 above it
+  is SUSPENDED entirely until a real-time SIP feed exists.
+```
+
+`docs/QMS-01_Operational_Spec_v1.1_paper.md` §15, "Suspension lifted for
+the amended §8 — 2026-08-11 (b)" (authoritative):
+```
+The suspension above was scoped to the ORIGINAL §8 ... **That constraint
+does not apply to the amended "confirmed-hold market entry" rule.** ...
+So the amended §8 is executable, accurately, with no subscription ...
+`market-open` stays DISABLED until the amended rule is implemented and
+verified end-to-end. Re-enabling remains a deliberate act, not a
+setting. What is no longer true is that it requires paying for data.
+```
+plus §13 amendments dated 2026-08-11 (b): §8.2–8.5 replaced with
+confirmed-hold market entry, and `market-open` retimed 10:05 -> 10:20 ET.
+
+Three specific contradictions:
+1. **Precondition for re-enabling.** Mirror: "Do not re-enable without
+   real-time SIP." Docs: paying for data is no longer the gate;
+   end-to-end verification is.
+2. **10:20 ET.** Mirror records it as considered and rejected. Docs adopt
+   it as the decision time (§13, §14, `routines/README.md` `20 14 * * 1-5`).
+3. **Which §8 is in force.** Mirror describes the retrospective 10:05
+   stop-limit approximation. Docs retired it — stop-limit band, tick
+   rounding and `PRICE_RAN_AWAY` are all gone.
+
+**No trading impact this week.** Both texts agree `market-open` is
+DISABLED right now, so the disagreement did not change any action: zero
+entries were possible either way, and `memory/POSITIONS.json` is empty.
+The disagreement is about the conditions for re-enabling, which no
+routine may perform.
+
+**Rule that doesn't cover this / was ambiguous:** none to apply — this is
+the CLAUDE.md docs-vs-mirror conflict clause itself. `docs/` wins on
+substance; the mirror's stale text is not authority. Section 0.3 forbids
+this agent from resolving it, and CLAUDE.md forbids this routine from
+editing either file ("Any amendment goes into `docs/` first, then gets
+mirrored").
+
+**Action taken:** none. `memory/TRADING-STRATEGY.md` and `docs/` both
+left byte-for-byte unchanged. No parameter read, inferred or substituted.
+Recorded here and cross-referenced from the 2026-08-14 weekly review.
+
+**For the operator (NOT applied):** re-mirror §15 and the Known Gaps
+entry in `memory/TRADING-STRATEGY.md` from the current `docs/` §15,
+including the "Suspension lifted" sub-section and the 2026-08-11 (b)
+§13 rows. Same for the weekly-review "Known Gaps Reminder" block, which
+still names "IEX-feed volume" though the screener moved to `feed=sip` on
+2026-08-11 — that block is restated verbatim each week by instruction,
+so it will keep reprinting the stale gap until the mirror is updated.
