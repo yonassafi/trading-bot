@@ -91,3 +91,29 @@ reproduced here since neither used a real day's full scan.)
 - close_below_reference_sma_recently: 1
 - monotonic_contraction_failed: 1
 
+
+## 2026-08-14 — Pre-market Screener
+
+**Regime (ONEQ):** PASS
+10 SMA: 104.4169 (yesterday 103.9074) | 20 SMA: 101.8125 (yesterday 101.5787)
+
+**Universe:** 5911 tradable common-stock candidates
+**Stage A survivors (price/liquidity/ADR):** 1068
+**Stage B candidates (post setup-scan/exclusions):** 0
+
+No candidates qualified today.
+
+**Rejection counts (first disqualifying rule):**
+- dollar_volume: 1741
+- price_below_5: 1556
+- adr_below_4pct: 1389
+- momentum_percentile: 1021
+- insufficient_history: 189
+- consolidation_window: 3
+- higher_lows_failed: 3
+- no_reference_sma: 3
+- close_below_50sma_in_consolidation: 2
+- convergence_failed: 2
+- close_below_reference_sma_recently: 1
+- no_prior_impulse: 1
+
